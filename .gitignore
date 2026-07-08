@@ -5,6 +5,8 @@
 upload
 *.exe
 *.db
+*.dump
+*.sql
 build
 *.db-journal
 logs
@@ -29,6 +31,8 @@ plans
 electron/node_modules
 electron/dist
 data/
+backup/
+backups/
 .gomodcache/
 .gocache-temp
 .gopath

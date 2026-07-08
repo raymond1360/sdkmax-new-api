@@ -30,6 +30,15 @@ function Require-Env {
   return $value
 }
 
+function Get-GitRemoteUrl {
+  param([string]$Name)
+  $url = git remote get-url $Name 2>$null
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($url)) {
+    throw "Git remote '$Name' is not configured. Add a private deploy remote first."
+  }
+  return $url.Trim()
+}
+
 function Run-Remote {
   param([string]$Command)
   ssh -p $script:SshPort "$script:SshUser@$script:SshHost" $Command
@@ -38,10 +47,13 @@ function Run-Remote {
 Read-DotEnv $EnvFile
 
 $branch = if ($env:DEPLOY_BRANCH) { $env:DEPLOY_BRANCH } else { "sdkmax-prod" }
-$remote = if ($env:DEPLOY_REMOTE) { $env:DEPLOY_REMOTE } else { "origin" }
+$remote = Require-Env "DEPLOY_REMOTE"
+$remoteNameOnServer = if ($env:DEPLOY_REMOTE_NAME_ON_SERVER) { $env:DEPLOY_REMOTE_NAME_ON_SERVER } else { "origin" }
 $healthUrl = if ($env:DEPLOY_HEALTH_URL) { $env:DEPLOY_HEALTH_URL } else { "https://api.sdkmax.com/api/status" }
-$composeFile = if ($env:DEPLOY_COMPOSE_FILE) { $env:DEPLOY_COMPOSE_FILE } else { "docker-compose.yml" }
+$composeFile = if ($env:DEPLOY_COMPOSE_FILE) { $env:DEPLOY_COMPOSE_FILE } else { "docker-compose.prod.yml" }
 $service = if ($env:DEPLOY_COMPOSE_SERVICE) { $env:DEPLOY_COMPOSE_SERVICE } else { "new-api" }
+$healthTimeout = if ($env:DEPLOY_HEALTH_TIMEOUT_SECONDS) { [int]$env:DEPLOY_HEALTH_TIMEOUT_SECONDS } else { 90 }
+$healthInterval = if ($env:DEPLOY_HEALTH_INTERVAL_SECONDS) { [int]$env:DEPLOY_HEALTH_INTERVAL_SECONDS } else { 3 }
 
 $script:SshHost = Require-Env "DEPLOY_SSH_HOST"
 $script:SshUser = Require-Env "DEPLOY_SSH_USER"
@@ -56,6 +68,11 @@ if ($currentBranch -ne $branch) {
   throw "Current branch is '$currentBranch'. Switch to '$branch' before production deploy."
 }
 
+$remoteUrl = Get-GitRemoteUrl $remote
+if ($remote -eq "origin" -or $remoteUrl -match "github\.com[:/]QuantumNous/new-api(\.git)?$") {
+  throw "Refusing to deploy through '$remote' ($remoteUrl). Configure DEPLOY_REMOTE as a private SDKMAX deploy remote."
+}
+
 if ((git status --porcelain).Trim()) {
   throw "Working tree is not clean. Commit or stash changes before deploy."
 }
@@ -66,30 +83,58 @@ Write-Host "Deploying $branch at $localCommit"
 git push $remote "${branch}:${branch}"
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$remoteScript = @"
+$remoteScriptTemplate = @'
 set -euo pipefail
-cd '$appDir'
-PREV_COMMIT=\$(git rev-parse HEAD)
-mkdir -p '$backupDir/$timestamp'
-echo "\$PREV_COMMIT" > '$backupDir/$timestamp/previous_commit.txt'
-($dbBackupCmd) > '$backupDir/$timestamp/db.sql'
-if [ -d '$dataDir' ]; then tar -czf '$backupDir/$timestamp/data.tar.gz' -C '$dataDir' .; fi
-git fetch origin '$branch'
-git checkout '$branch'
-git reset --hard 'origin/$branch'
-docker compose -f '$composeFile' build
-docker compose -f '$composeFile' up -d
-sleep 8
-if curl -fsS '$healthUrl' >/dev/null; then
-  echo 'Health check passed.'
-else
-  echo 'Health check failed. Rolling back to previous commit.'
-  git reset --hard "\$PREV_COMMIT"
-  docker compose -f '$composeFile' build
-  docker compose -f '$composeFile' up -d
+cd '__APP_DIR__'
+PREV_COMMIT=$(git rev-parse HEAD)
+mkdir -p '__BACKUP_DIR__/__TIMESTAMP__'
+echo "$PREV_COMMIT" > '__BACKUP_DIR__/__TIMESTAMP__/previous_commit.txt'
+(__DB_BACKUP_CMD__) > '__BACKUP_DIR__/__TIMESTAMP__/db.sql'
+if [ -d '__DATA_DIR__' ]; then tar -czf '__BACKUP_DIR__/__TIMESTAMP__/data.tar.gz' -C '__DATA_DIR__' .; fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo 'Remote working tree has uncommitted changes. Refusing to reset.'
+  git status --porcelain
   exit 1
 fi
-"@
+git fetch '__REMOTE_NAME_ON_SERVER__' '__BRANCH__'
+git checkout '__BRANCH__'
+git reset --hard '__REMOTE_NAME_ON_SERVER__/__BRANCH__'
+docker compose -f '__COMPOSE_FILE__' build
+docker compose -f '__COMPOSE_FILE__' up -d
+deadline=$((SECONDS + __HEALTH_TIMEOUT__))
+until curl -fsS '__HEALTH_URL__' >/dev/null; do
+  if [ $SECONDS -ge $deadline ]; then
+    echo 'Health check failed. Rolling back to previous commit.'
+    git reset --hard "$PREV_COMMIT"
+    docker compose -f '__COMPOSE_FILE__' build
+    docker compose -f '__COMPOSE_FILE__' up -d
+    exit 1
+  fi
+  sleep __HEALTH_INTERVAL__
+done
+echo 'Health check passed.'
+if ! docker compose -f '__COMPOSE_FILE__' ps '__SERVICE__' >/dev/null; then
+  echo 'Compose service check failed. Rolling back to previous commit.'
+  git reset --hard "$PREV_COMMIT"
+  docker compose -f '__COMPOSE_FILE__' build
+  docker compose -f '__COMPOSE_FILE__' up -d
+  exit 1
+fi
+'@
+
+$remoteScript = $remoteScriptTemplate.
+  Replace("__APP_DIR__", $appDir).
+  Replace("__BACKUP_DIR__", $backupDir).
+  Replace("__TIMESTAMP__", $timestamp).
+  Replace("__DB_BACKUP_CMD__", $dbBackupCmd).
+  Replace("__DATA_DIR__", $dataDir).
+  Replace("__REMOTE_NAME_ON_SERVER__", $remoteNameOnServer).
+  Replace("__BRANCH__", $branch).
+  Replace("__COMPOSE_FILE__", $composeFile).
+  Replace("__HEALTH_TIMEOUT__", [string]$healthTimeout).
+  Replace("__HEALTH_URL__", $healthUrl).
+  Replace("__HEALTH_INTERVAL__", [string]$healthInterval).
+  Replace("__SERVICE__", $service)
 
 Run-Remote $remoteScript
 Write-Host "Deployment finished successfully."

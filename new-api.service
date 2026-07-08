@@ -3,6 +3,8 @@
 # sudo systemctl start new-api
 # sudo systemctl enable new-api
 # sudo systemctl status new-api
+# SDKMAX production uses Docker Compose on BT/Nginx, not this systemd unit.
+# Keep this upstream file only as a reference for direct binary deployments.
 [Unit]
 Description=One API Service
 After=network.target

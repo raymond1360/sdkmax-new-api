@@ -108,6 +108,7 @@ Install or download Go modules:
 
 ```powershell
 $env:PATH = "D:\sdkmax\tools\go\bin;$env:PATH"
+$env:GOPROXY = "https://goproxy.cn,direct"
 go mod download
 ```
 
@@ -224,6 +225,30 @@ git merge sdkmax-dev
 powershell -ExecutionPolicy Bypass -File .\scripts\deploy-prod.ps1
 ```
 
+Production deployment uses `docker-compose.prod.yml`, not the upstream sample `docker-compose.yml`.
+
+`docker-compose.prod.yml` builds from the server's checked-out SDKMAX source through the repository `Dockerfile`. It does not use `calciumion/new-api:latest`, and it does not start bundled PostgreSQL or MySQL containers. The production container uses host networking so `SQL_DSN` can point at the BT-managed native MySQL instance on `127.0.0.1:3306`.
+
+Before the first deploy, add a private deployment remote. Keep `origin` for the official upstream repository only:
+
+```powershell
+git remote -v
+git remote add deploy <your-private-sdkmax-repo-or-server-bare-repo-url>
+```
+
+Then set these values in ignored `.env`:
+
+```dotenv
+DEPLOY_REMOTE=deploy
+DEPLOY_REMOTE_NAME_ON_SERVER=origin
+DEPLOY_REMOTE_APP_DIR=/www/wwwroot/new-api
+DEPLOY_REMOTE_DATA_DIR=/www/wwwroot/new-api/data
+DEPLOY_COMPOSE_FILE=docker-compose.prod.yml
+DEPLOY_REMOTE_DB_BACKUP_CMD=mysqldump -u<user> -p'<password>' sdkmax_new_api
+```
+
+Confirm the real server path in BT panel or with `docker inspect` before the first production run. Do not deploy through `origin`; the script refuses to push to the public `QuantumNous/new-api` upstream.
+
 The deploy script:
 
 - loads deployment settings from `.env`;
@@ -231,8 +256,8 @@ The deploy script:
 - pushes the selected local branch;
 - SSHes to the server;
 - pulls the selected branch;
-- runs `docker compose build` and `docker compose up -d`;
-- checks `https://api.sdkmax.com`;
+- runs `docker compose -f docker-compose.prod.yml build` and `docker compose -f docker-compose.prod.yml up -d`;
+- checks `https://api.sdkmax.com` with retries;
 - rolls back to the previous commit if health check fails.
 
 Keep production secrets in the local `.env` and the server environment, never in Git.
