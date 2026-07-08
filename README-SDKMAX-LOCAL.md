@@ -249,6 +249,8 @@ DEPLOY_REMOTE_DB_BACKUP_CMD=mysqldump -u<user> -p'<password>' sdkmax_new_api
 
 Confirm the real server path in BT panel or with `docker inspect` before the first production run. Do not deploy through `origin`; the script refuses to push to the public `QuantumNous/new-api` upstream.
 
+If the current production container was started manually before this Compose workflow existed, set `DEPLOY_LEGACY_CONTAINER_NAME` for the first cutover only. The script will stop that legacy container after a successful build, start the Compose-managed container, and restart the legacy container if the health check fails. Clear this variable after the first successful Compose deployment.
+
 The deploy script:
 
 - loads deployment settings from `.env`;

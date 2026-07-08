@@ -54,6 +54,7 @@ $composeFile = if ($env:DEPLOY_COMPOSE_FILE) { $env:DEPLOY_COMPOSE_FILE } else {
 $service = if ($env:DEPLOY_COMPOSE_SERVICE) { $env:DEPLOY_COMPOSE_SERVICE } else { "new-api" }
 $healthTimeout = if ($env:DEPLOY_HEALTH_TIMEOUT_SECONDS) { [int]$env:DEPLOY_HEALTH_TIMEOUT_SECONDS } else { 90 }
 $healthInterval = if ($env:DEPLOY_HEALTH_INTERVAL_SECONDS) { [int]$env:DEPLOY_HEALTH_INTERVAL_SECONDS } else { 3 }
+$legacyContainer = if ($env:DEPLOY_LEGACY_CONTAINER_NAME) { $env:DEPLOY_LEGACY_CONTAINER_NAME } else { "" }
 
 $script:SshHost = Require-Env "DEPLOY_SSH_HOST"
 $script:SshUser = Require-Env "DEPLOY_SSH_USER"
@@ -87,6 +88,22 @@ $remoteScriptTemplate = @'
 set -euo pipefail
 cd '__APP_DIR__'
 PREV_COMMIT=$(git rev-parse HEAD)
+LEGACY_CONTAINER='__LEGACY_CONTAINER__'
+legacy_exists() {
+  [ -n "$LEGACY_CONTAINER" ] && docker ps -a --format '{{.Names}}' | grep -qx "$LEGACY_CONTAINER"
+}
+rollback_deploy() {
+  echo 'Rolling back deployment.'
+  git reset --hard "$PREV_COMMIT"
+  docker compose -f '__COMPOSE_FILE__' down || true
+  if legacy_exists; then
+    docker start "$LEGACY_CONTAINER" || true
+    echo "Legacy container restored: $LEGACY_CONTAINER"
+  else
+    docker compose -f '__COMPOSE_FILE__' build
+    docker compose -f '__COMPOSE_FILE__' up -d
+  fi
+}
 mkdir -p '__BACKUP_DIR__/__TIMESTAMP__'
 echo "$PREV_COMMIT" > '__BACKUP_DIR__/__TIMESTAMP__/previous_commit.txt'
 (__DB_BACKUP_CMD__) > '__BACKUP_DIR__/__TIMESTAMP__/db.sql'
@@ -100,14 +117,18 @@ git fetch '__REMOTE_NAME_ON_SERVER__' '__BRANCH__'
 git checkout '__BRANCH__'
 git reset --hard '__REMOTE_NAME_ON_SERVER__/__BRANCH__'
 docker compose -f '__COMPOSE_FILE__' build
-docker compose -f '__COMPOSE_FILE__' up -d
+if legacy_exists; then
+  docker stop "$LEGACY_CONTAINER"
+fi
+if ! docker compose -f '__COMPOSE_FILE__' up -d; then
+  rollback_deploy
+  exit 1
+fi
 deadline=$((SECONDS + __HEALTH_TIMEOUT__))
 until curl -fsS '__HEALTH_URL__' >/dev/null; do
   if [ $SECONDS -ge $deadline ]; then
     echo 'Health check failed. Rolling back to previous commit.'
-    git reset --hard "$PREV_COMMIT"
-    docker compose -f '__COMPOSE_FILE__' build
-    docker compose -f '__COMPOSE_FILE__' up -d
+    rollback_deploy
     exit 1
   fi
   sleep __HEALTH_INTERVAL__
@@ -115,10 +136,11 @@ done
 echo 'Health check passed.'
 if ! docker compose -f '__COMPOSE_FILE__' ps '__SERVICE__' >/dev/null; then
   echo 'Compose service check failed. Rolling back to previous commit.'
-  git reset --hard "$PREV_COMMIT"
-  docker compose -f '__COMPOSE_FILE__' build
-  docker compose -f '__COMPOSE_FILE__' up -d
+  rollback_deploy
   exit 1
+fi
+if legacy_exists; then
+  echo "Legacy container remains stopped for manual rollback: $LEGACY_CONTAINER"
 fi
 '@
 
@@ -128,6 +150,7 @@ $remoteScript = $remoteScriptTemplate.
   Replace("__TIMESTAMP__", $timestamp).
   Replace("__DB_BACKUP_CMD__", $dbBackupCmd).
   Replace("__DATA_DIR__", $dataDir).
+  Replace("__LEGACY_CONTAINER__", $legacyContainer).
   Replace("__REMOTE_NAME_ON_SERVER__", $remoteNameOnServer).
   Replace("__BRANCH__", $branch).
   Replace("__COMPOSE_FILE__", $composeFile).
