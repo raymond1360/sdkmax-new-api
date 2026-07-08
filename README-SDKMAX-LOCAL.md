@@ -244,7 +244,7 @@ DEPLOY_REMOTE_NAME_ON_SERVER=origin
 DEPLOY_REMOTE_APP_DIR=/www/wwwroot/new-api
 DEPLOY_REMOTE_DATA_DIR=/www/wwwroot/new-api/data
 DEPLOY_COMPOSE_FILE=docker-compose.prod.yml
-DEPLOY_REMOTE_DB_BACKUP_CMD=mysqldump -u<user> -p'<password>' sdkmax_new_api
+DEPLOY_REMOTE_DB_BACKUP_CMD=mysqldump --no-tablespaces -u<user> -p'<password>' sdkmax_new_api
 ```
 
 Confirm the real server path in BT panel or with `docker inspect` before the first production run. Do not deploy through `origin`; the script refuses to push to the public `QuantumNous/new-api` upstream.
