@@ -74,7 +74,8 @@ if ($remote -eq "origin" -or $remoteUrl -match "github\.com[:/]QuantumNous/new-a
   throw "Refusing to deploy through '$remote' ($remoteUrl). Configure DEPLOY_REMOTE as a private SDKMAX deploy remote."
 }
 
-if ((git status --porcelain).Trim()) {
+$workingTreeStatus = git status --porcelain
+if (($workingTreeStatus -join "`n").Trim()) {
   throw "Working tree is not clean. Commit or stash changes before deploy."
 }
 
