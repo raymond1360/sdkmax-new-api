@@ -41,7 +41,7 @@ function Get-GitRemoteUrl {
 
 function Run-Remote {
   param([string]$Command)
-  ssh -p $script:SshPort "$script:SshUser@$script:SshHost" $Command
+  $Command | ssh -p $script:SshPort "$script:SshUser@$script:SshHost" "bash -s"
   if ($LASTEXITCODE -ne 0) {
     throw "Remote command failed with exit code $LASTEXITCODE"
   }
