@@ -128,6 +128,24 @@ func subtractModelNames(base []string, removed []string) []string {
 	})
 }
 
+func modelNameMatchesPattern(modelName string, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	if regexBody, ok := strings.CutPrefix(pattern, "regex:"); ok {
+		matched, err := regexp.MatchString(strings.TrimSpace(regexBody), modelName)
+		return err == nil && matched
+	}
+	return pattern == modelName
+}
+
+func modelNameMatchesAnyPattern(modelName string, patterns []string) bool {
+	return lo.ContainsBy(normalizeModelNames(patterns), func(pattern string) bool {
+		return modelNameMatchesPattern(modelName, pattern)
+	})
+}
+
 func intersectModelNames(base []string, allowed []string) []string {
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, model := range normalizeModelNames(allowed) {
@@ -177,6 +195,7 @@ func collectPendingUpstreamModelChangesFromModels(
 	localModels []string,
 	upstreamModels []string,
 	ignoredModels []string,
+	pinnedModels []string,
 	modelMapping map[string]string,
 ) (pendingAddModels []string, pendingRemoveModels []string) {
 	localSet := make(map[string]struct{})
@@ -211,13 +230,7 @@ func collectPendingUpstreamModelChangesFromModels(
 		if _, ok := coveredUpstreamSet[modelName]; ok {
 			return false
 		}
-		if lo.ContainsBy(normalizedIgnoredModels, func(ignoredModel string) bool {
-			if regexBody, ok := strings.CutPrefix(ignoredModel, "regex:"); ok {
-				matched, err := regexp.MatchString(strings.TrimSpace(regexBody), modelName)
-				return err == nil && matched
-			}
-			return ignoredModel == modelName
-		}) {
+		if modelNameMatchesAnyPattern(modelName, normalizedIgnoredModels) {
 			return false
 		}
 		return true
@@ -226,6 +239,9 @@ func collectPendingUpstreamModelChangesFromModels(
 		// Redirect source models are virtual aliases and should not be removed
 		// only because they are absent from upstream model list.
 		if _, ok := redirectSourceSet[modelName]; ok {
+			return false
+		}
+		if modelNameMatchesAnyPattern(modelName, pinnedModels) {
 			return false
 		}
 		_, ok := upstreamSet[modelName]
@@ -243,6 +259,7 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 		channel.GetModels(),
 		upstreamModels,
 		settings.UpstreamModelUpdateIgnoredModels,
+		settings.UpstreamModelUpdatePinnedModels,
 		normalizeChannelModelMapping(channel),
 	)
 	return pendingAddModels, pendingRemoveModels, nil
@@ -797,6 +814,7 @@ func applyChannelUpstreamModelUpdates(
 	ignoreModels := intersectModelNames(ignoreModelsInput, pendingAddModels)
 	removeModels := intersectModelNames(removeModelsInput, pendingRemoveModels)
 	removeModels = subtractModelNames(removeModels, addModels)
+	removeModels = subtractModelNames(removeModels, settings.UpstreamModelUpdatePinnedModels)
 
 	originModels := normalizeModelNames(channel.GetModels())
 	nextModels := applySelectedModelChanges(originModels, addModels, removeModels)

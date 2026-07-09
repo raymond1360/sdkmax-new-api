@@ -106,6 +106,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithModelMapping(t *testin
 		[]string{"alias-model", "gpt-4o", "stale-model"},
 		[]string{"gpt-4o", "gpt-4.1", "mapped-target"},
 		[]string{"gpt-4.1"},
+		nil,
 		map[string]string{
 			"alias-model": "mapped-target",
 		},
@@ -121,10 +122,24 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 		[]string{"gpt-4o", "claude-3-5-sonnet", "sora-video", "gpt-4.1"},
 		[]string{"regex:^sora-.*$", "gpt-4.1"},
 		nil,
+		nil,
 	)
 
 	require.Equal(t, []string{"claude-3-5-sonnet"}, pendingAddModels)
 	require.Equal(t, []string{}, pendingRemoveModels)
+}
+
+func TestCollectPendingUpstreamModelChangesFromModels_WithPinnedModels(t *testing.T) {
+	pendingAddModels, pendingRemoveModels := collectPendingUpstreamModelChangesFromModels(
+		[]string{"manual-model", "legacy-vision", "stale-model"},
+		[]string{"new-upstream-model"},
+		nil,
+		[]string{"manual-model", "regex:^legacy-.*$"},
+		nil,
+	)
+
+	require.Equal(t, []string{"new-upstream-model"}, pendingAddModels)
+	require.Equal(t, []string{"stale-model"}, pendingRemoveModels)
 }
 
 func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *testing.T) {
