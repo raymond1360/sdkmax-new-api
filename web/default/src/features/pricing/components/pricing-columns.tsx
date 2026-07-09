@@ -40,6 +40,7 @@ import {
   formatRequestPrice,
   stripTrailingZeros,
 } from '../lib/price'
+import { renderModelLogo } from '../lib/model-logo'
 import type { PricingModel, TokenUnit } from '../types'
 
 // ----------------------------------------------------------------------------
@@ -106,13 +107,13 @@ export function usePricingColumns(
       ),
       cell: ({ row }) => {
         const model = row.original
-        const vendorIcon = model.vendor_icon
-          ? getLobeIcon(model.vendor_icon, 14)
-          : null
+        const modelLogo = renderModelLogo(model, 16)
 
         return (
           <div className='flex min-w-[200px] items-center gap-2'>
-            {vendorIcon}
+            <span className='bg-background flex size-5 shrink-0 items-center justify-center rounded-md border'>
+              {modelLogo}
+            </span>
             <span className='truncate font-mono text-sm font-medium'>
               {model.model_name}
             </span>
