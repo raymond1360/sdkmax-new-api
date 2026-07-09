@@ -39,5 +39,6 @@ backups/
 .gocache-temp
 .gopath
 .test
+.deploy/
 token_estimator_test.go
 skills-lock.json
