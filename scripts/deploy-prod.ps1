@@ -42,6 +42,9 @@ function Get-GitRemoteUrl {
 function Run-Remote {
   param([string]$Command)
   ssh -p $script:SshPort "$script:SshUser@$script:SshHost" $Command
+  if ($LASTEXITCODE -ne 0) {
+    throw "Remote command failed with exit code $LASTEXITCODE"
+  }
 }
 
 Read-DotEnv $EnvFile
@@ -159,6 +162,7 @@ $remoteScript = $remoteScriptTemplate.
   Replace("__HEALTH_URL__", $healthUrl).
   Replace("__HEALTH_INTERVAL__", [string]$healthInterval).
   Replace("__SERVICE__", $service)
+$remoteScript = $remoteScript -replace "`r`n", "`n"
 
 Run-Remote $remoteScript
 Write-Host "Deployment finished successfully."
