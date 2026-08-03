@@ -2,16 +2,16 @@ name: Release (Linux, macOS, Windows)
 permissions:
   contents: write
 
+# SDKMAX: automatic tag-push trigger disabled. This workflow builds and
+# uploads standalone Linux/macOS/Windows binaries, which SDKMAX's Docker-only
+# deployment doesn't use, and it was firing (and failing) on every SDKMAX
+# production version tag. Manual dispatch only.
 on:
   workflow_dispatch:
     inputs:
       name:
         description: 'reason'
         required: false
-  push:
-    tags:
-      - '*'
-      - '!*-alpha*'
 
 jobs:
   linux:

@@ -1,11 +1,9 @@
 name: Build Electron App
 
+# SDKMAX: automatic tag-push trigger disabled. SDKMAX ships as a web service
+# only (no Electron desktop app), and this workflow was firing (and failing)
+# on every SDKMAX production version tag. Manual dispatch only.
 on:
-  push:
-    tags:
-      - '*'  # Triggers on version tags like v1.0.0
-      - '!*-*'  # Ignore pre-release tags like v1.0.0-beta
-      - '!*-alpha*' # Ignore alpha tags like v1.0.0-alpha
   workflow_dispatch:  # Allows manual triggering
 
 jobs:

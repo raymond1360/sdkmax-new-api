@@ -1,9 +1,9 @@
 name: Publish Docker image (alpha)
 
+# SDKMAX: automatic push trigger disabled, this workflow publishes to the
+# upstream calciumion/new-api image, not SDKMAX's own image. Manual dispatch
+# only to avoid noisy/failing runs on SDKMAX branches and tags.
 on:
-  push:
-    branches:
-      - alpha
   workflow_dispatch:
     inputs:
       name:
