@@ -23,24 +23,40 @@ import { CCSwitchDialog } from './dialogs/cc-switch-dialog'
 import { TokenQuickStartDialog } from './dialogs/token-quick-start-dialog'
 
 export function ApiKeysDialogs() {
-  const { open, setOpen, currentRow, resolvedKey, quickStartKey } = useApiKeys()
+  const {
+    open,
+    setOpen,
+    currentRow,
+    resolvedKey,
+    quickStartKey,
+    setQuickStartKey,
+  } = useApiKeys()
+
+  const closeDialog = () => {
+    setOpen(null)
+  }
+
+  const closeQuickStartDialog = () => {
+    setQuickStartKey('')
+    setOpen(null)
+  }
 
   return (
     <>
       <ApiKeysMutateDrawer
         open={open === 'create' || open === 'update'}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+        onOpenChange={(isOpen) => !isOpen && closeDialog()}
         currentRow={open === 'update' ? currentRow || undefined : undefined}
       />
       <ApiKeysDeleteDialog />
       <CCSwitchDialog
         open={open === 'cc-switch'}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+        onOpenChange={(isOpen) => !isOpen && closeDialog()}
         tokenKey={resolvedKey}
       />
       <TokenQuickStartDialog
         open={open === 'quick-start'}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+        onOpenChange={(isOpen) => !isOpen && closeQuickStartDialog()}
         apiKey={quickStartKey}
       />
     </>

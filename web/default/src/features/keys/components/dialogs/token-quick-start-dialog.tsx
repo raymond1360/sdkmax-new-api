@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react'
 import { Check, Eye, EyeOff, Terminal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -32,7 +33,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CopyButton } from '@/components/copy-button'
-import { SDKMAX_API_BASE_URL } from '../../constants'
+import { getSdkmaxApiBaseUrl } from '../../constants'
 
 type Provider = 'openai' | 'anthropic' | 'gemini'
 type Language = 'python' | 'node' | 'curl'
@@ -67,11 +68,11 @@ function normalizeApiKey(apiKey: string): string {
 function buildCodeSample(
   provider: Provider,
   language: Language,
-  apiKey: string
+  apiKey: string,
+  baseUrl: string
 ) {
   const model =
     PROVIDERS.find((item) => item.value === provider)?.model ?? 'gpt-4o'
-  const baseUrl = SDKMAX_API_BASE_URL
 
   if (language === 'python') {
     return [
@@ -151,17 +152,20 @@ export function TokenQuickStartDialog({
   apiKey,
 }: TokenQuickStartDialogProps) {
   const { t } = useTranslation()
+  const { status } = useStatus()
   const [showKey, setShowKey] = useState(false)
   const [provider, setProvider] = useState<Provider>('openai')
   const [language, setLanguage] = useState<Language>('python')
   const fullApiKey = normalizeApiKey(apiKey)
+  const baseUrl = getSdkmaxApiBaseUrl(status?.server_address)
+  const sampleApiKey = showKey ? fullApiKey : 'YOUR_API_KEY'
   const maskedKey = fullApiKey
     ? `${fullApiKey.slice(0, 7)}${'•'.repeat(18)}${fullApiKey.slice(-6)}`
     : ''
 
   const code = useMemo(
-    () => buildCodeSample(provider, language, fullApiKey),
-    [provider, language, fullApiKey]
+    () => buildCodeSample(provider, language, sampleApiKey, baseUrl),
+    [provider, language, sampleApiKey, baseUrl]
   )
 
   return (
@@ -206,12 +210,9 @@ export function TokenQuickStartDialog({
               <Label>{t('Base URL')}</Label>
               <div className='flex min-w-0 items-center gap-2 rounded-md border px-3 py-2'>
                 <code className='min-w-0 flex-1 truncate text-xs'>
-                  {SDKMAX_API_BASE_URL}
+                  {baseUrl}
                 </code>
-                <CopyButton
-                  value={SDKMAX_API_BASE_URL}
-                  tooltip={t('Copy Base URL')}
-                />
+                <CopyButton value={baseUrl} tooltip={t('Copy Base URL')} />
               </div>
             </div>
           </div>
@@ -221,6 +222,11 @@ export function TokenQuickStartDialog({
               <Terminal className='size-4' />
               {t('Quick start examples')}
             </div>
+            {!showKey && (
+              <p className='text-muted-foreground text-xs'>
+                {t('API Key is hidden in examples. Click show to include it.')}
+              </p>
+            )}
 
             <Tabs
               value={provider}

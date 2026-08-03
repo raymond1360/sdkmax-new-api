@@ -72,11 +72,23 @@ export const API_KEY_STATUS_OPTIONS = Object.values(API_KEY_STATUSES).map(
 
 export const DEFAULT_GROUP = '' as const
 
-export const SDKMAX_API_BASE_URL =
-  (import.meta.env.VITE_SDKMAX_API_BASE_URL as string | undefined)?.replace(
-    /\/+$/,
-    ''
-  ) || 'https://api.sdkmax.com/v1'
+export const SDKMAX_DEFAULT_API_BASE_URL = 'https://api.sdkmax.com/v1'
+
+export function getSdkmaxApiBaseUrl(serverAddress?: string | null) {
+  const normalizedServerAddress = serverAddress?.trim().replace(/\/+$/, '')
+  if (normalizedServerAddress) {
+    return normalizedServerAddress.endsWith('/v1')
+      ? normalizedServerAddress
+      : `${normalizedServerAddress}/v1`
+  }
+
+  return (
+    (import.meta.env.VITE_SDKMAX_API_BASE_URL as string | undefined)?.replace(
+      /\/+$/,
+      ''
+    ) || SDKMAX_DEFAULT_API_BASE_URL
+  )
+}
 
 // ============================================================================
 // Error Messages (i18n keys: use t(ERROR_MESSAGES.xxx) when displaying)
