@@ -131,12 +131,18 @@ function buildCodeSample(
   ].join('\n')
 }
 
-function CodeBlock({ code }: { code: string }) {
+function CodeBlock({
+  code,
+  copyTooltip,
+}: {
+  code: string
+  copyTooltip: string
+}) {
   return (
     <div className='bg-muted/50 relative overflow-hidden rounded-md border'>
       <CopyButton
         value={code}
-        tooltip='Copy code'
+        tooltip={copyTooltip}
         className='bg-background/80 absolute top-2 right-2 backdrop-blur'
       />
       <pre className='max-h-[360px] overflow-auto p-3 pr-12 text-xs leading-relaxed'>
@@ -157,7 +163,11 @@ export function TokenQuickStartDialog({
   const [provider, setProvider] = useState<Provider>('openai')
   const [language, setLanguage] = useState<Language>('python')
   const fullApiKey = normalizeApiKey(apiKey)
-  const baseUrl = getSdkmaxApiBaseUrl(status?.server_address)
+  const serverAddress =
+    typeof status?.server_address === 'string'
+      ? status.server_address
+      : undefined
+  const baseUrl = getSdkmaxApiBaseUrl(serverAddress)
   const sampleApiKey = showKey ? fullApiKey : 'YOUR_API_KEY'
   const maskedKey = fullApiKey
     ? `${fullApiKey.slice(0, 7)}${'•'.repeat(18)}${fullApiKey.slice(-6)}`
@@ -258,7 +268,7 @@ export function TokenQuickStartDialog({
                   value={item.value}
                   className={cn(item.value === language ? 'block' : 'hidden')}
                 >
-                  <CodeBlock code={code} />
+                  <CodeBlock code={code} copyTooltip={t('Copy code')} />
                 </TabsContent>
               ))}
             </Tabs>
