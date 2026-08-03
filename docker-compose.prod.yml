@@ -4,7 +4,7 @@
 
 services:
   new-api:
-    image: ${SDKMAX_IMAGE:-raymond1360/sdkmax-new-api:v1.0.1}
+    image: ${SDKMAX_IMAGE:-raymondlee1976/sdkmax-new-api:v1.0.1}
     container_name: sdkmax-new-api
     restart: always
     network_mode: host
