@@ -20,7 +20,6 @@ import { useMemo, useState } from 'react'
 import { Check, Eye, EyeOff, Terminal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -158,16 +157,11 @@ export function TokenQuickStartDialog({
   apiKey,
 }: TokenQuickStartDialogProps) {
   const { t } = useTranslation()
-  const { status } = useStatus()
   const [showKey, setShowKey] = useState(false)
   const [provider, setProvider] = useState<Provider>('openai')
   const [language, setLanguage] = useState<Language>('python')
   const fullApiKey = normalizeApiKey(apiKey)
-  const serverAddress =
-    typeof status?.server_address === 'string'
-      ? status.server_address
-      : undefined
-  const baseUrl = getSdkmaxApiBaseUrl(serverAddress)
+  const baseUrl = getSdkmaxApiBaseUrl()
   const sampleApiKey = showKey ? fullApiKey : 'YOUR_API_KEY'
   const maskedKey = fullApiKey
     ? `${fullApiKey.slice(0, 7)}${'•'.repeat(18)}${fullApiKey.slice(-6)}`

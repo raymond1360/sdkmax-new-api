@@ -74,20 +74,19 @@ export const DEFAULT_GROUP = '' as const
 
 export const SDKMAX_DEFAULT_API_BASE_URL = 'https://api.sdkmax.com/v1'
 
-export function getSdkmaxApiBaseUrl(serverAddress?: string | null) {
-  const normalizedServerAddress = serverAddress?.trim().replace(/\/+$/, '')
-  if (normalizedServerAddress) {
-    return normalizedServerAddress.endsWith('/v1')
-      ? normalizedServerAddress
-      : `${normalizedServerAddress}/v1`
-  }
-
-  return (
-    (import.meta.env.VITE_SDKMAX_API_BASE_URL as string | undefined)?.replace(
-      /\/+$/,
-      ''
-    ) || SDKMAX_DEFAULT_API_BASE_URL
+export function getSdkmaxApiBaseUrl() {
+  return normalizeSdkmaxApiBaseUrl(
+    import.meta.env.VITE_SDKMAX_API_BASE_URL as string | undefined
   )
+}
+
+function normalizeSdkmaxApiBaseUrl(baseUrl?: string | null) {
+  const normalizedBaseUrl = baseUrl?.trim().replace(/\/+$/, '')
+  if (!normalizedBaseUrl) return SDKMAX_DEFAULT_API_BASE_URL
+
+  return normalizedBaseUrl.endsWith('/v1')
+    ? normalizedBaseUrl
+    : `${normalizedBaseUrl}/v1`
 }
 
 // ============================================================================

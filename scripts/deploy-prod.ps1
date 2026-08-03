@@ -58,6 +58,7 @@ $service = if ($env:DEPLOY_COMPOSE_SERVICE) { $env:DEPLOY_COMPOSE_SERVICE } else
 $healthTimeout = if ($env:DEPLOY_HEALTH_TIMEOUT_SECONDS) { [int]$env:DEPLOY_HEALTH_TIMEOUT_SECONDS } else { 90 }
 $healthInterval = if ($env:DEPLOY_HEALTH_INTERVAL_SECONDS) { [int]$env:DEPLOY_HEALTH_INTERVAL_SECONDS } else { 3 }
 $legacyContainer = if ($env:DEPLOY_LEGACY_CONTAINER_NAME) { $env:DEPLOY_LEGACY_CONTAINER_NAME } else { "" }
+$image = if ($env:DEPLOY_IMAGE) { $env:DEPLOY_IMAGE } else { "" }
 
 $script:SshHost = Require-Env "DEPLOY_SSH_HOST"
 $script:SshUser = Require-Env "DEPLOY_SSH_USER"
@@ -99,17 +100,21 @@ legacy_exists() {
 rollback_deploy() {
   echo 'Rolling back deployment.'
   git reset --hard "$PREV_COMMIT"
-  docker compose -f '__COMPOSE_FILE__' down || true
+  if [ -n "$PREV_IMAGE" ]; then
+    export SDKMAX_IMAGE="$PREV_IMAGE"
+  fi
+  docker compose -f '__COMPOSE_FILE__' pull '__SERVICE__' || true
   if legacy_exists; then
     docker start "$LEGACY_CONTAINER" || true
     echo "Legacy container restored: $LEGACY_CONTAINER"
   else
-    docker compose -f '__COMPOSE_FILE__' build
     docker compose -f '__COMPOSE_FILE__' up -d
   fi
 }
 mkdir -p '__BACKUP_DIR__/__TIMESTAMP__'
 echo "$PREV_COMMIT" > '__BACKUP_DIR__/__TIMESTAMP__/previous_commit.txt'
+PREV_IMAGE=$(docker compose -f '__COMPOSE_FILE__' config | awk '/image:/ {print $2; exit}')
+echo "$PREV_IMAGE" > '__BACKUP_DIR__/__TIMESTAMP__/previous_image.txt'
 (__DB_BACKUP_CMD__) > '__BACKUP_DIR__/__TIMESTAMP__/db.sql'
 if [ -d '__DATA_DIR__' ]; then tar -czf '__BACKUP_DIR__/__TIMESTAMP__/data.tar.gz' -C '__DATA_DIR__' .; fi
 if [ -n "$(git status --porcelain)" ]; then
@@ -120,7 +125,10 @@ fi
 git fetch '__REMOTE_NAME_ON_SERVER__' '__BRANCH__'
 git checkout '__BRANCH__'
 git reset --hard '__REMOTE_NAME_ON_SERVER__/__BRANCH__'
-docker compose -f '__COMPOSE_FILE__' build
+if [ -n '__IMAGE__' ]; then
+  export SDKMAX_IMAGE='__IMAGE__'
+fi
+docker compose -f '__COMPOSE_FILE__' pull '__SERVICE__'
 if legacy_exists; then
   docker stop "$LEGACY_CONTAINER"
 fi
@@ -158,6 +166,7 @@ $remoteScript = $remoteScriptTemplate.
   Replace("__REMOTE_NAME_ON_SERVER__", $remoteNameOnServer).
   Replace("__BRANCH__", $branch).
   Replace("__COMPOSE_FILE__", $composeFile).
+  Replace("__IMAGE__", $image).
   Replace("__HEALTH_TIMEOUT__", [string]$healthTimeout).
   Replace("__HEALTH_URL__", $healthUrl).
   Replace("__HEALTH_INTERVAL__", [string]$healthInterval).

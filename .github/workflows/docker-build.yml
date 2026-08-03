@@ -1,62 +1,63 @@
-name: Publish Docker image (Multi-arch)
+name: Build SDKMAX production image
 
 on:
   push:
-    tags:
-      - '*'
-      - '!nightly*'
+    branches:
+      - sdkmax-prod
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Tag name to build (e.g., v0.10.8-alpha.3)'
-        required: true
+      image_tag:
+        description: "Version tag to publish, for example v1.0.1"
+        required: false
         type: string
 
+concurrency:
+  group: sdkmax-docker-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build_single_arch:
-    name: Build & push (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
+  build:
+    name: Build and push linux/amd64 image
+    runs-on: ubuntu-latest
 
     permissions:
-      packages: write
       contents: read
-      id-token: write
 
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 0 || 1 }}
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
-      - name: Resolve tag & write VERSION
+      - name: Resolve image tags
         id: version
+        shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-            if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "::error::Tag '$TAG' does not exist"
-              exit 1
-            fi
+          set -euo pipefail
+
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          INPUT_TAG="${{ github.event.inputs.image_tag || '' }}"
+          POINTING_TAG="$(git tag --points-at HEAD --list 'v[0-9]*' | sort -V | tail -n 1 || true)"
+
+          if [ -n "$INPUT_TAG" ]; then
+            VERSION_TAG="$INPUT_TAG"
+          elif [ -n "$POINTING_TAG" ]; then
+            VERSION_TAG="$POINTING_TAG"
           else
-            TAG=${GITHUB_REF#refs/tags/}
+            VERSION_TAG="v1.0.${GITHUB_RUN_NUMBER}"
           fi
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "${TAG}" > VERSION
-          echo "Building tag: ${TAG} for ${{ matrix.arch }}"
+
+          if [[ ! "$VERSION_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9_.-]+)?$ ]]; then
+            echo "::error::Invalid image tag '$VERSION_TAG'. Expected a version such as v1.0.1."
+            exit 1
+          fi
+
+          IMAGE_REPOSITORY="${{ secrets.DOCKERHUB_USERNAME }}/sdkmax-new-api"
+
+          echo "$VERSION_TAG" > VERSION
+          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "image_repository=$IMAGE_REPOSITORY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -67,75 +68,35 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata (labels)
+      - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: calciumion/new-api
+          images: ${{ steps.version.outputs.image_repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version_tag }}
+            type=raw,value=sdkmax-prod
+            type=raw,value=sha-${{ steps.version.outputs.short_sha }}
 
-      - name: Build & push
-        id: build
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ matrix.platform }}
+          file: ./Dockerfile
+          platforms: linux/amd64
           push: true
-          tags: |
-            calciumion/new-api:${{ env.TAG }}-${{ matrix.arch }}
-            calciumion/new-api:latest-${{ matrix.arch }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
+          cache-from: type=gha,scope=sdkmax-prod-amd64
+          cache-to: type=gha,mode=max,scope=sdkmax-prod-amd64
+          provenance: false
+          sbom: false
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign image with cosign
-        run: cosign sign --yes calciumion/new-api@${{ steps.build.outputs.digest }}
-
-      - name: Image summary
+      - name: Build summary
         run: |
-          echo "### Docker Image Digest (${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "calciumion/new-api:${TAG}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-  create_manifests:
-    name: Create multi-arch manifests
-    needs: [build_single_arch]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-
-    steps:
-      - name: Set version
-        run: echo "TAG=${{ needs.build_single_arch.outputs.tag }}" >> $GITHUB_ENV
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create & push manifest (version)
-        run: |
-          docker buildx imagetools create \
-            -t calciumion/new-api:${TAG} \
-            calciumion/new-api:${TAG}-amd64 \
-            calciumion/new-api:${TAG}-arm64
-
-      - name: Create & push manifest (latest)
-        run: |
-          docker buildx imagetools create \
-            -t calciumion/new-api:latest \
-            calciumion/new-api:latest-amd64 \
-            calciumion/new-api:latest-arm64
-
-      - name: Manifest summary
-        run: |
-          echo "### Multi-arch Manifest" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect calciumion/new-api:${TAG} >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "### SDKMAX production image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Repository: \`${{ steps.version.outputs.image_repository }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version tag: \`${{ steps.version.outputs.version_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch tag: \`sdkmax-prod\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit tag: \`sha-${{ steps.version.outputs.short_sha }}\`" >> "$GITHUB_STEP_SUMMARY"

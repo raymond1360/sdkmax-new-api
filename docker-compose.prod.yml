@@ -1,13 +1,10 @@
 # SDKMAX production compose file.
-# This file builds from the checked-out local source. It must not use upstream
-# floating runtime images.
+# Runtime-only production compose file. Production servers pull a prebuilt
+# SDKMAX image from Docker Hub and must not build images locally.
 
 services:
   new-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sdkmax-new-api:v1.0.0-rc.10-sdkmax
+    image: ${SDKMAX_IMAGE:-raymond1360/sdkmax-new-api:v1.0.1}
     container_name: sdkmax-new-api
     restart: always
     network_mode: host
