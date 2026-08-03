@@ -41,9 +41,24 @@ function Get-GitRemoteUrl {
 
 function Run-Remote {
   param([string]$Command)
-  $Command | ssh -p $script:SshPort "$script:SshUser@$script:SshHost" "bash -s"
-  if ($LASTEXITCODE -ne 0) {
-    throw "Remote command failed with exit code $LASTEXITCODE"
+  # Piping a multiline string straight into a native process ("$Command | ssh ...")
+  # goes through PowerShell 5.1's console-output encoding, which prepends a UTF-8
+  # BOM and can corrupt the stream. .NET Framework's Process.StandardInput
+  # StreamWriter has the same BOM problem even when writing raw bytes to its
+  # BaseStream. Writing the script to a temp file and letting cmd.exe redirect
+  # it into ssh's stdin at the OS level avoids both: no managed stream/encoding
+  # layer sits between the file bytes and the child process.
+  $tempFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tempFile, $Command, $utf8NoBom)
+    $sshArgs = '-p {0} {1}@{2} "bash -s"' -f $script:SshPort, $script:SshUser, $script:SshHost
+    & cmd /c "ssh $sshArgs < ""$tempFile"""
+    if ($LASTEXITCODE -ne 0) {
+      throw "Remote command failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    [System.IO.File]::Delete($tempFile)
   }
 }
 
