@@ -72,6 +72,12 @@ export const API_KEY_STATUS_OPTIONS = Object.values(API_KEY_STATUSES).map(
 
 export const DEFAULT_GROUP = '' as const
 
+export const SDKMAX_API_BASE_URL =
+  (import.meta.env.VITE_SDKMAX_API_BASE_URL as string | undefined)?.replace(
+    /\/+$/,
+    ''
+  ) || 'https://api.sdkmax.com/v1'
+
 // ============================================================================
 // Error Messages (i18n keys: use t(ERROR_MESSAGES.xxx) when displaying)
 // ============================================================================

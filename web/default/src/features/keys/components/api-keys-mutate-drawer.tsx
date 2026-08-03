@@ -94,7 +94,8 @@ export function ApiKeysMutateDrawer({
 }: ApiKeyMutateDrawerProps) {
   const { t } = useTranslation()
   const isUpdate = !!currentRow
-  const { triggerRefresh } = useApiKeys()
+  const { triggerRefresh, setOpen, setQuickStartKey, resolveRealKey } =
+    useApiKeys()
   const { status } = useStatus()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -184,6 +185,7 @@ export function ApiKeysMutateDrawer({
         // Create mode - handle batch creation
         const count = data.tokenCount || 1
         let successCount = 0
+        let firstCreatedTokenId: number | null = null
 
         for (let i = 0; i < count; i++) {
           const result = await createApiKey({
@@ -195,6 +197,9 @@ export function ApiKeysMutateDrawer({
           })
           if (result.success) {
             successCount++
+            if (!firstCreatedTokenId && result.data?.id) {
+              firstCreatedTokenId = result.data.id
+            }
           } else {
             toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
             break
@@ -209,6 +214,13 @@ export function ApiKeysMutateDrawer({
           )
           onOpenChange(false)
           triggerRefresh()
+          if (firstCreatedTokenId) {
+            const realKey = await resolveRealKey(firstCreatedTokenId)
+            if (realKey) {
+              setQuickStartKey(realKey)
+              setOpen('quick-start')
+            }
+          }
         }
       }
     } catch (_error) {
