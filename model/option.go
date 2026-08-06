@@ -148,6 +148,10 @@ func InitOptionMap() {
 	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
 	common.OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString()
 	common.OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString()
+	common.OptionMap["OpenRouterGlobalPriceMultiplier"] = FormatOpenRouterMultiplier(OpenRouterDefaultGlobalMultiplier)
+	common.OptionMap["OpenRouterUnifiedChannelId"] = "0"
+	common.OptionMap["OpenRouterAutoSyncEnabled"] = "false"
+	common.OptionMap["OpenRouterAutoSyncIntervalMinutes"] = "360"
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
@@ -227,22 +231,32 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			option.Value = v
-			if err := tx.Save(&option).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		return UpdateOptionsBulkInTx(tx, values)
+	}); err != nil {
 		return err
 	}
+	return ApplyOptionMapUpdates(values)
+}
+
+func UpdateOptionsBulkInTx(tx *gorm.DB, values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	for k, v := range values {
+		option := Option{Key: k}
+		if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
+			return err
+		}
+		option.Value = v
+		if err := tx.Save(&option).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ApplyOptionMapUpdates(values map[string]string) error {
 	for k, v := range values {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
