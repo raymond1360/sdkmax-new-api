@@ -57,6 +57,7 @@ import {
 import { StatusBadge } from '@/components/status-badge'
 import {
   combineBillingExpr,
+  parseTiersFromExpr,
   splitBillingExprAndRequestRules,
 } from '@/features/pricing/lib/billing-expr'
 import { safeJsonParse } from '../utils/json-parser'
@@ -134,7 +135,32 @@ const getModeVariant = (mode?: string): 'warning' | 'info' | 'success' => {
   return 'success'
 }
 
+const formatUsdPerMillion = (value: unknown) => {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num <= 0) return '$0.00'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: num >= 1 ? 2 : 6,
+  }).format(num)
+}
+
+const isOpenRouterSyncBillingExpr = (expr?: string) =>
+  Boolean(expr && /tier\("openrouter"/.test(expr))
+
+const getOpenRouterSyncPriceSummary = (expr?: string) => {
+  if (!isOpenRouterSyncBillingExpr(expr)) return ''
+  const tier = parseTiersFromExpr(expr || '')[0]
+  if (!tier) return ''
+  return `${formatUsdPerMillion(tier.inputPrice)} / ${formatUsdPerMillion(
+    tier.outputPrice
+  )} per 1M`
+}
+
 const getExpressionSummary = (row: ModelRow, t: (key: string) => string) => {
+  const syncPrice = getOpenRouterSyncPriceSummary(row.billingExpr)
+  if (syncPrice) return syncPrice
   const tierCount = (row.billingExpr?.match(/tier\(/g) || []).length
   if (tierCount > 0) {
     return `${t('Tiered pricing')} · ${tierCount} ${t('tiers')}`
@@ -169,6 +195,9 @@ const getPriceSummary = (row: ModelRow, t: (key: string) => string) => {
 
 const getPriceDetail = (row: ModelRow, t: (key: string) => string) => {
   if (row.billingMode === 'tiered_expr') {
+    if (isOpenRouterSyncBillingExpr(row.billingExpr)) {
+      return 'OpenRouter Sync SDKMAX Price'
+    }
     return row.requestRuleExpr
       ? t('Includes request rules')
       : t('Expression based')
@@ -331,25 +360,23 @@ export const ModelRatioVisualEditor = memo(
 
         const modeForModel = billingModeMap[name]
         if (modeForModel === 'tiered_expr') {
-          // Tiered_expr models may also retain ratio/price values as fallback
-          // during multi-instance sync delays. We preserve them in the row so
-          // the edit dialog round-trip and the next save don't drop them.
           const fullExpr = billingExprMap[name] || ''
           const { billingExpr: pureExpr, requestRuleExpr } =
             splitBillingExprAndRequestRules(fullExpr)
+          const isOpenRouterSyncPrice = isOpenRouterSyncBillingExpr(pureExpr)
           return {
             name,
             billingMode: 'tiered_expr',
             billingExpr: pureExpr,
             requestRuleExpr,
-            price,
-            ratio,
-            cacheRatio: cache,
-            createCacheRatio: createCache,
-            completionRatio: completion,
-            imageRatio: image,
-            audioRatio: audio,
-            audioCompletionRatio: audioCompletion,
+            price: isOpenRouterSyncPrice ? '' : price,
+            ratio: isOpenRouterSyncPrice ? '' : ratio,
+            cacheRatio: isOpenRouterSyncPrice ? '' : cache,
+            createCacheRatio: isOpenRouterSyncPrice ? '' : createCache,
+            completionRatio: isOpenRouterSyncPrice ? '' : completion,
+            imageRatio: isOpenRouterSyncPrice ? '' : image,
+            audioRatio: isOpenRouterSyncPrice ? '' : audio,
+            audioCompletionRatio: isOpenRouterSyncPrice ? '' : audioCompletion,
             hasConflict: false,
           }
         }
@@ -776,18 +803,20 @@ export const ModelRatioVisualEditor = memo(
               billingModeMap[name] = 'tiered_expr'
               billingExprMap[name] = combined
             }
-            // Always serialize ratio/price values for tiered_expr models so they
-            // serve as fallback during multi-instance sync delays. The backend's
-            // ModelPriceHelper checks billing_mode first, so these values are
-            // only consulted when billing_setting hasn't propagated yet.
-            setIfPresent(priceMap, name, data.price)
-            setIfPresent(ratioMap, name, data.ratio)
-            setIfPresent(cacheMap, name, data.cacheRatio)
-            setIfPresent(createCacheMap, name, data.createCacheRatio)
-            setIfPresent(completionMap, name, data.completionRatio)
-            setIfPresent(imageMap, name, data.imageRatio)
-            setIfPresent(audioMap, name, data.audioRatio)
-            setIfPresent(audioCompletionMap, name, data.audioCompletionRatio)
+            if (!isOpenRouterSyncBillingExpr(data.billingExpr)) {
+              setIfPresent(priceMap, name, data.price)
+              setIfPresent(ratioMap, name, data.ratio)
+              setIfPresent(cacheMap, name, data.cacheRatio)
+              setIfPresent(createCacheMap, name, data.createCacheRatio)
+              setIfPresent(completionMap, name, data.completionRatio)
+              setIfPresent(imageMap, name, data.imageRatio)
+              setIfPresent(audioMap, name, data.audioRatio)
+              setIfPresent(
+                audioCompletionMap,
+                name,
+                data.audioCompletionRatio
+              )
+            }
           } else if (data.price && data.price !== '') {
             setIfPresent(priceMap, name, data.price)
           } else {

@@ -224,6 +224,16 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
 		}
+		openRouterSyncRoute := apiRouter.Group("/openrouter_sync")
+		openRouterSyncRoute.Use(middleware.RootAuth())
+		{
+			openRouterSyncRoute.GET("/", controller.GetOpenRouterSyncState)
+			openRouterSyncRoute.POST("/sync", controller.TriggerOpenRouterSync)
+			openRouterSyncRoute.PUT("/global_multiplier", controller.UpdateOpenRouterGlobalMultiplier)
+			openRouterSyncRoute.PUT("/model_multiplier", controller.UpdateOpenRouterModelMultiplier)
+			openRouterSyncRoute.GET("/channels", controller.GetOpenRouterChannels)
+			openRouterSyncRoute.PUT("/channel", controller.UpdateOpenRouterUnifiedChannel)
+		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{
