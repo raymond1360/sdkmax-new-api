@@ -21,6 +21,9 @@ import type {
   ConfirmPaymentComplianceResponse,
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
+  OpenRouterChannelsResponse,
+  OpenRouterSyncResponse,
+  OpenRouterSyncStateResponse,
   SystemOptionsResponse,
   UpdateOptionRequest,
   UpdateOptionResponse,
@@ -71,6 +74,77 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   const res = await api.post<UpstreamRatiosResponse>(
     '/api/ratio_sync/fetch',
     request
+  )
+  return res.data
+}
+
+export async function getOpenRouterSyncState() {
+  const res = await api.get<OpenRouterSyncStateResponse>(
+    '/api/openrouter_sync/',
+    {
+      params: { _t: Date.now() },
+      skipErrorHandler: true,
+      disableDuplicate: true,
+    }
+  )
+  return res.data
+}
+
+export async function triggerOpenRouterSync() {
+  const res = await api.post<OpenRouterSyncResponse>(
+    '/api/openrouter_sync/sync',
+    undefined,
+    {
+      skipErrorHandler: true,
+    }
+  )
+  return res.data
+}
+
+export async function updateOpenRouterGlobalMultiplier(multiplier: string) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/openrouter_sync/global_multiplier',
+    { multiplier },
+    {
+      skipErrorHandler: true,
+    }
+  )
+  return res.data
+}
+
+export async function updateOpenRouterModelMultiplier(
+  model_id: string,
+  multiplier: string
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/openrouter_sync/model_multiplier',
+    { model_id, multiplier },
+    {
+      skipErrorHandler: true,
+    }
+  )
+  return res.data
+}
+
+export async function getOpenRouterChannels() {
+  const res = await api.get<OpenRouterChannelsResponse>(
+    '/api/openrouter_sync/channels',
+    {
+      params: { _t: Date.now() },
+      skipErrorHandler: true,
+      disableDuplicate: true,
+    }
+  )
+  return res.data
+}
+
+export async function updateOpenRouterUnifiedChannel(channel_id: number) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/openrouter_sync/channel',
+    { channel_id },
+    {
+      skipErrorHandler: true,
+    }
   )
   return res.data
 }

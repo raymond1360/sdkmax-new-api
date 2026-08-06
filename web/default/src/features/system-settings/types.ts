@@ -389,3 +389,79 @@ export type UpstreamRatiosResponse = {
     test_results: TestResult[]
   }
 }
+
+export type OpenRouterSyncModel = {
+  id: number
+  model_id: string
+  model_name: string
+  provider: string
+  context_length: number
+  openrouter_input_price: string
+  openrouter_output_price: string
+  sdkmax_input_price: string
+  sdkmax_output_price: string
+  global_multiplier: string
+  model_multiplier: string
+  unified_openrouter_channel_id: number
+  healthy: boolean
+  health_message: string
+  last_synced_at: number
+  last_health_checked_at: number
+}
+
+export type OpenRouterSyncLog = {
+  id: number
+  status: string
+  message: string
+  models_fetched: number
+  models_created: number
+  models_updated: number
+  models_disabled: number
+  channel_id: number
+  started_at: number
+  finished_at: number
+  duration_ms: number
+}
+
+export type OpenRouterSyncChannel = {
+  id: number
+  name: string
+  status: number
+  base_url: string
+  models: number
+}
+
+export type OpenRouterSyncStateResponse = {
+  success: boolean
+  message?: string
+  data: {
+    settings: {
+      global_multiplier: string
+      unified_channel_id: string
+      auto_sync_enabled: boolean
+      interval_minutes: string
+      allowed_multipliers: string[]
+    }
+    models: OpenRouterSyncModel[]
+    model_multipliers: Record<string, string>
+    logs: OpenRouterSyncLog[]
+  }
+}
+
+export type OpenRouterSyncResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    models_fetched: number
+    models_created: number
+    models_updated: number
+    models_disabled: number
+    channel_id: number
+  }
+}
+
+export type OpenRouterChannelsResponse = {
+  success: boolean
+  message?: string
+  data: OpenRouterSyncChannel[]
+}
