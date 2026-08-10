@@ -65,19 +65,20 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const collections = getModelCollections(props.model.model_name)
   const officialPrice = getOfficialModelPrice(props.model.model_name)
   const sdkmaxPrice = getSdkmaxTokenPriceSnapshot(props.model)
-  const canCompare =
-    Boolean(officialPrice && sdkmaxPrice) &&
-    officialPrice!.input >= sdkmaxPrice!.input &&
-    officialPrice!.output >= sdkmaxPrice!.output
-  const savingPercent =
-    canCompare && officialPrice && sdkmaxPrice
+  const canCompare = Boolean(officialPrice && sdkmaxPrice)
+  const officialTotal = officialPrice
+    ? officialPrice.input + officialPrice.output
+    : 0
+  const sdkmaxTotal = sdkmaxPrice ? sdkmaxPrice.input + sdkmaxPrice.output : 0
+  const officialLower = canCompare && officialTotal < sdkmaxTotal
+  const priceDeltaPercent =
+    canCompare && officialTotal > 0 && sdkmaxTotal > 0
       ? Math.max(
           0,
           Math.round(
-            (1 -
-              (sdkmaxPrice.input + sdkmaxPrice.output) /
-                (officialPrice.input + officialPrice.output)) *
-              100
+            (officialLower
+              ? sdkmaxTotal / officialTotal - 1
+              : 1 - sdkmaxTotal / officialTotal) * 100
           )
         )
       : 0
@@ -172,8 +173,19 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               <span className='text-muted-foreground text-xs'>
                 {t('Official vs SDKMAX')}
               </span>
-              <span className='rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300'>
-                {t('Save {{percent}}%', { percent: savingPercent })}
+              <span
+                className={cn(
+                  'rounded-md px-2 py-0.5 text-xs font-semibold',
+                  officialLower
+                    ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                )}
+              >
+                {officialLower
+                  ? t('Official lower {{percent}}%', {
+                      percent: priceDeltaPercent,
+                    })
+                  : t('Save {{percent}}%', { percent: priceDeltaPercent })}
               </span>
             </div>
             <div className='grid grid-cols-2 gap-2 text-xs'>

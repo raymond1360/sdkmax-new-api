@@ -94,6 +94,7 @@ export const STATIC_I18N_KEYS = [
   'Official vs SDKMAX',
   'SDKMAX price',
   'Save {{percent}}%',
+  'Official lower {{percent}}%',
   'Official',
   '/ 1M input and output tokens',
   'See details for pricing',

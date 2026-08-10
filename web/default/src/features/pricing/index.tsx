@@ -20,6 +20,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   SDKMAX_MODEL_COLLECTIONS,
+  getOfficialModelPrice,
   modelMatchesCollection,
   type SdkmaxModelCollectionId,
 } from '@/lib/sdkmax-model-collections'
@@ -39,6 +40,17 @@ import {
 import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
 import { usePricingData } from './hooks/use-pricing-data'
+import { getSdkmaxTokenPriceSnapshot } from './lib/price'
+
+function hasSdkmaxLowerPrice(model: { model_name: string }) {
+  const officialPrice = getOfficialModelPrice(model.model_name)
+  const sdkmaxPrice = getSdkmaxTokenPriceSnapshot(model)
+  if (!officialPrice || !sdkmaxPrice) return false
+  return (
+    sdkmaxPrice.input + sdkmaxPrice.output <
+    officialPrice.input + officialPrice.output
+  )
+}
 
 export function Pricing() {
   const { t } = useTranslation()
@@ -118,17 +130,23 @@ export function Pricing() {
   }, [models])
 
   const collectionFilteredModels = useMemo(() => {
+    let result = filteredModels
     if (selectedCollection === 'all') {
-      return filteredModels
+      result = filteredModels
+    } else {
+      const collection = SDKMAX_MODEL_COLLECTIONS.find(
+        (item) => item.id === selectedCollection
+      )
+      if (collection) {
+        result = filteredModels.filter((model) =>
+          modelMatchesCollection(model.model_name || '', collection)
+        )
+      }
     }
-    const collection = SDKMAX_MODEL_COLLECTIONS.find(
-      (item) => item.id === selectedCollection
-    )
-    if (!collection) {
-      return filteredModels
-    }
-    return filteredModels.filter((model) =>
-      modelMatchesCollection(model.model_name || '', collection)
+
+    return [...result].sort(
+      (a, b) =>
+        Number(hasSdkmaxLowerPrice(b)) - Number(hasSdkmaxLowerPrice(a))
     )
   }, [filteredModels, selectedCollection])
 
