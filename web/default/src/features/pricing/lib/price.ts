@@ -309,6 +309,8 @@ export function getSdkmaxTokenPriceSnapshot(model: PricingModel): {
     if (Number.isFinite(input) && Number.isFinite(output)) {
       return { input, output }
     }
+
+    return null
   }
 
   if (model.quota_type !== QUOTA_TYPE_VALUES.TOKEN) {
