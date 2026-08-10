@@ -17,8 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { memo } from 'react'
-import { ChevronRight, Copy } from 'lucide-react'
+import { ChevronRight, Copy, KeyRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { formatCurrencyFromUSD } from '@/lib/currency'
+import {
+  getModelCollections,
+  getOfficialModelPrice,
+} from '@/lib/sdkmax-model-collections'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { StatusBadge } from '@/components/status-badge'
@@ -26,6 +31,7 @@ import { DEFAULT_TOKEN_UNIT } from '../constants'
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import { renderModelLogo } from '../lib/model-logo'
+import { getSdkmaxTokenPriceSnapshot, stripTrailingZeros } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
 
@@ -37,6 +43,7 @@ export interface ModelCardProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   perf?: ModelPerfBadgeData
+  onUse?: (modelName: string) => void
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
@@ -55,6 +62,25 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
 
   const primaryGroup = groups[0]
   const bottomTags = [...endpoints.slice(0, 2), ...tags.slice(0, 2)]
+  const collections = getModelCollections(props.model.model_name)
+  const officialPrice = getOfficialModelPrice(props.model.model_name)
+  const sdkmaxPrice = getSdkmaxTokenPriceSnapshot(props.model)
+  const canCompare =
+    Boolean(officialPrice && sdkmaxPrice) &&
+    officialPrice!.input >= sdkmaxPrice!.input &&
+    officialPrice!.output >= sdkmaxPrice!.output
+  const savingPercent =
+    canCompare && officialPrice && sdkmaxPrice
+      ? Math.max(
+          0,
+          Math.round(
+            (1 -
+              (sdkmaxPrice.input + sdkmaxPrice.output) /
+                (officialPrice.input + officialPrice.output)) *
+              100
+          )
+        )
+      : 0
   const hiddenCount =
     Math.max(groups.length - 1, 0) +
     Math.max(endpoints.length - 2, 0) +
@@ -63,6 +89,11 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation()
     copyToClipboard(props.model.model_name || '')
+  }
+
+  const handleUse = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    props.onUse?.(props.model.model_name || '')
   }
 
   return (
@@ -122,6 +153,86 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         {props.model.description || t('No description available.')}
       </p>
 
+      <div className='mt-3 flex flex-wrap gap-1.5'>
+        {collections.slice(0, 2).map((collection) => (
+          <StatusBadge
+            key={collection.id}
+            label={t(collection.title)}
+            variant='info'
+            copyable={false}
+            size='sm'
+          />
+        ))}
+        {collections[0]?.tags.slice(0, 2).map((tag) => (
+          <StatusBadge
+            key={tag}
+            label={t(tag)}
+            autoColor={tag}
+            copyable={false}
+            size='sm'
+          />
+        ))}
+      </div>
+
+      <div className='bg-muted/20 mt-3 rounded-lg border p-3'>
+        {canCompare && officialPrice && sdkmaxPrice ? (
+          <div className='space-y-2'>
+            <div className='flex items-center justify-between gap-2'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Official vs SDKMAX')}
+              </span>
+              <span className='rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300'>
+                {t('Save {{percent}}%', { percent: savingPercent })}
+              </span>
+            </div>
+            <div className='grid grid-cols-2 gap-2 text-xs'>
+              <div>
+                <div className='text-muted-foreground/70'>{t('Official')}</div>
+                <div className='font-mono tabular-nums'>
+                  {stripTrailingZeros(
+                    formatCurrencyFromUSD(officialPrice.input)
+                  )}{' '}
+                  /{' '}
+                  {stripTrailingZeros(
+                    formatCurrencyFromUSD(officialPrice.output)
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className='text-muted-foreground/70'>SDKMAX</div>
+                <div className='font-mono tabular-nums'>
+                  {stripTrailingZeros(formatCurrencyFromUSD(sdkmaxPrice.input))}{' '}
+                  /{' '}
+                  {stripTrailingZeros(
+                    formatCurrencyFromUSD(sdkmaxPrice.output)
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className='text-muted-foreground/50 text-[10px]'>
+              / 1M input and output tokens
+            </div>
+          </div>
+        ) : sdkmaxPrice ? (
+          <div className='space-y-1'>
+            <div className='text-muted-foreground text-xs'>
+              {t('SDKMAX price')}
+            </div>
+            <div className='font-mono text-sm tabular-nums'>
+              {stripTrailingZeros(formatCurrencyFromUSD(sdkmaxPrice.input))} /{' '}
+              {stripTrailingZeros(formatCurrencyFromUSD(sdkmaxPrice.output))}
+            </div>
+            <div className='text-muted-foreground/50 text-[10px]'>
+              / 1M input and output tokens
+            </div>
+          </div>
+        ) : (
+          <div className='text-muted-foreground text-xs'>
+            {t('See details for pricing')}
+          </div>
+        )}
+      </div>
+
       {/* Footer: left metadata and right performance summary share row alignment */}
       <div className='mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1 sm:mt-4'>
         <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
@@ -160,6 +271,15 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           )}
         </div>
       </div>
+
+      <button
+        type='button'
+        onClick={handleUse}
+        className='bg-primary text-primary-foreground hover:bg-primary/90 mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors'
+      >
+        <KeyRound className='size-4' />
+        {t('Use now')}
+      </button>
     </div>
   )
 })

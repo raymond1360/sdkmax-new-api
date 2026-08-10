@@ -18,6 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  SDKMAX_MODEL_COLLECTIONS,
+  modelMatchesCollection,
+  type SdkmaxModelCollectionId,
+} from '@/lib/sdkmax-model-collections'
+import { cn } from '@/lib/utils'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 import {
@@ -39,6 +45,9 @@ export function Pricing() {
   const [selectedModelName, setSelectedModelName] = useState<string | null>(
     null
   )
+  const [selectedCollection, setSelectedCollection] = useState<
+    SdkmaxModelCollectionId | 'all'
+  >('recommended')
 
   const {
     models,
@@ -95,6 +104,34 @@ export function Pricing() {
     [models, selectedModelName]
   )
 
+  const collectionCounts = useMemo(() => {
+    const counts = new Map<SdkmaxModelCollectionId, number>()
+    for (const collection of SDKMAX_MODEL_COLLECTIONS) {
+      counts.set(
+        collection.id,
+        (models || []).filter((model) =>
+          modelMatchesCollection(model.model_name || '', collection)
+        ).length
+      )
+    }
+    return counts
+  }, [models])
+
+  const collectionFilteredModels = useMemo(() => {
+    if (selectedCollection === 'all') {
+      return filteredModels
+    }
+    const collection = SDKMAX_MODEL_COLLECTIONS.find(
+      (item) => item.id === selectedCollection
+    )
+    if (!collection) {
+      return filteredModels
+    }
+    return filteredModels.filter((model) =>
+      modelMatchesCollection(model.model_name || '', collection)
+    )
+  }, [filteredModels, selectedCollection])
+
   const availableGroups = useMemo(
     () =>
       Object.keys(usableGroup || {}).filter(
@@ -106,10 +143,20 @@ export function Pricing() {
   const handleClearAll = useCallback(() => {
     clearFilters()
     clearSearch()
+    setSelectedCollection('all')
   }, [clearFilters, clearSearch])
 
+  const handleUseModel = useCallback((modelName: string) => {
+    if (typeof window === 'undefined') return
+    window.sessionStorage.setItem(
+      'sdkmax.apiKeyPreset',
+      JSON.stringify({ source: 'pricing', models: [modelName] })
+    )
+    window.location.assign('/keys')
+  }, [])
+
   const renderPricingContent = () => {
-    if (filteredModels.length === 0) {
+    if (collectionFilteredModels.length === 0) {
       return (
         <EmptyState
           searchQuery={searchInput}
@@ -122,19 +169,20 @@ export function Pricing() {
     if (viewMode === VIEW_MODES.CARD) {
       return (
         <ModelCardGrid
-          models={filteredModels}
+          models={collectionFilteredModels}
           onModelClick={handleModelClick}
           priceRate={priceRate}
           usdExchangeRate={usdExchangeRate}
           tokenUnit={tokenUnit}
           showRechargePrice={showRechargePrice}
+          onUseModel={handleUseModel}
         />
       )
     }
 
     return (
       <PricingTable
-        models={filteredModels}
+        models={collectionFilteredModels}
         priceRate={priceRate}
         usdExchangeRate={usdExchangeRate}
         tokenUnit={tokenUnit}
@@ -175,10 +223,10 @@ export function Pricing() {
         <PageTransition className='relative mx-auto w-full max-w-[1800px] px-3 pt-16 pb-8 sm:px-6 sm:pt-20 sm:pb-10 xl:px-8'>
           <header className='mx-auto mb-5 max-w-3xl pt-5 text-center sm:mb-10 sm:pt-10'>
             <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
-              {t('Models Directory')}
+              {t('AI model selection center')}
             </p>
             <h1 className='text-[clamp(2rem,5.5vw,3.5rem)] leading-[1.15] font-bold tracking-tight'>
-              {t('Model Square')}
+              SDKMAX
             </h1>
             <p className='text-muted-foreground/80 mt-3 text-sm sm:mt-4 sm:text-base'>
               {t('This site currently has {{count}} models enabled', {
@@ -200,6 +248,63 @@ export function Pricing() {
               className='mx-auto mt-4 max-w-2xl sm:mt-6'
             />
           </header>
+
+          <section className='mb-5 space-y-3 sm:mb-6'>
+            <div className='flex items-center justify-between gap-3'>
+              <div>
+                <h2 className='text-base font-semibold'>
+                  {t('Choose by scenario')}
+                </h2>
+                <p className='text-muted-foreground text-sm'>
+                  {t(
+                    'Model collections are recommendation presets and do not change billing groups.'
+                  )}
+                </p>
+              </div>
+              <button
+                type='button'
+                onClick={() => setSelectedCollection('all')}
+                className={cn(
+                  'hidden h-8 rounded-md border px-3 text-xs font-medium transition-colors sm:inline-flex sm:items-center',
+                  selectedCollection === 'all'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                )}
+              >
+                {t('All models')}
+              </button>
+            </div>
+            <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4'>
+              {SDKMAX_MODEL_COLLECTIONS.filter(
+                (collection) => collection.id !== 'developer'
+              ).map((collection) => {
+                const active = selectedCollection === collection.id
+                return (
+                  <button
+                    key={collection.id}
+                    type='button'
+                    onClick={() => setSelectedCollection(collection.id)}
+                    className={cn(
+                      'rounded-lg border p-3 text-left transition-colors',
+                      active
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/40'
+                    )}
+                  >
+                    <div className='flex items-center justify-between gap-2'>
+                      <span className='font-medium'>{t(collection.title)}</span>
+                      <span className='text-muted-foreground text-xs tabular-nums'>
+                        {collectionCounts.get(collection.id) || 0}
+                      </span>
+                    </div>
+                    <p className='text-muted-foreground mt-1 line-clamp-2 text-xs'>
+                      {t(collection.intent)}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
 
           <div className='grid gap-4 xl:grid-cols-[330px_minmax(0,1fr)]'>
             <PricingSidebar
@@ -225,7 +330,7 @@ export function Pricing() {
 
             <main className='min-w-0 space-y-4'>
               <PricingToolbar
-                filteredCount={filteredModels.length}
+                filteredCount={collectionFilteredModels.length}
                 totalCount={models?.length}
                 sortBy={sortBy}
                 onSortChange={setSortBy}

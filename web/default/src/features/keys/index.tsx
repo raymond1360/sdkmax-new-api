@@ -16,17 +16,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SectionPageLayout } from '@/components/layout'
 import { ApiKeysDialogs } from './components/api-keys-dialogs'
 import { ApiKeysPrimaryButtons } from './components/api-keys-primary-buttons'
-import { ApiKeysProvider } from './components/api-keys-provider'
+import { ApiKeysProvider, useApiKeys } from './components/api-keys-provider'
 import { ApiKeysTable } from './components/api-keys-table'
 
 export function ApiKeys() {
-  const { t } = useTranslation()
   return (
     <ApiKeysProvider>
+      <ApiKeysContent />
+    </ApiKeysProvider>
+  )
+}
+
+function ApiKeysContent() {
+  const { t } = useTranslation()
+  const { setOpen } = useApiKeys()
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.sessionStorage.getItem('sdkmax.apiKeyPreset')) {
+      setOpen('create')
+    }
+  }, [setOpen])
+
+  return (
+    <>
       <SectionPageLayout>
         <SectionPageLayout.Title>{t('API Keys')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
@@ -38,6 +56,6 @@ export function ApiKeys() {
       </SectionPageLayout>
 
       <ApiKeysDialogs />
-    </ApiKeysProvider>
+    </>
   )
 }
