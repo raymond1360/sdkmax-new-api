@@ -34,6 +34,7 @@ export type SdkmaxModelCollection = {
   intent: string
   patterns: RegExp[]
   tags: string[]
+  allModels?: boolean
 }
 
 export type OfficialModelPrice = {
@@ -46,11 +47,12 @@ export type OfficialModelPrice = {
 export const SDKMAX_MODEL_COLLECTIONS: SdkmaxModelCollection[] = [
   {
     id: 'recommended',
-    title: 'Smart picks',
-    description: 'Balanced models for most chat, tool use, and agent tasks.',
-    intent: 'Start here when you are not sure which model to choose.',
-    patterns: [/gpt-5/i, /claude.*sonnet/i, /gemini.*pro/i, /deepseek/i],
-    tags: ['balanced', 'agent', 'general'],
+    title: 'All models',
+    description: 'Every model enabled for the current pricing view.',
+    intent: 'Browse all models available on this site.',
+    patterns: [/./],
+    tags: ['all-models'],
+    allModels: true,
   },
   {
     id: 'coding',
@@ -242,12 +244,14 @@ export function modelMatchesCollection(
   modelName: string,
   collection: SdkmaxModelCollection
 ) {
+  if (collection.allModels) return true
   return collection.patterns.some((pattern) => pattern.test(modelName))
 }
 
 export function getModelCollections(modelName: string) {
   return SDKMAX_MODEL_COLLECTIONS.filter(
     (collection) =>
+      collection.id !== 'recommended' &&
       collection.id !== 'developer' &&
       modelMatchesCollection(modelName, collection)
   )
@@ -265,6 +269,7 @@ export function getCollectionModelNames<T extends { model_name?: string }>(
 ) {
   const collection = getCollectionById(collectionId)
   if (!collection) return []
+  if (collection.allModels) return []
   return models
     .map((model) => (typeof model === 'string' ? model : model.model_name))
     .filter((modelName): modelName is string =>

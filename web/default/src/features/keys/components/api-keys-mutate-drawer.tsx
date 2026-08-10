@@ -514,11 +514,13 @@ export function ApiKeysMutateDrawer({
                 />
                 <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
                   {SDKMAX_MODEL_COLLECTIONS.map((collection) => {
-                    const count = getCollectionModelNames(
-                      models,
-                      collection.id,
-                      99
-                    ).length
+                    const count = collection.allModels
+                      ? models.length
+                      : getCollectionModelNames(
+                          models,
+                          collection.id,
+                          99
+                        ).length
                     const active = selectedScenario === collection.id
                     return (
                       <button

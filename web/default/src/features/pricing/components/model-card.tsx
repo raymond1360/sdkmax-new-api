@@ -163,15 +163,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             size='sm'
           />
         ))}
-        {collections[0]?.tags.slice(0, 2).map((tag) => (
-          <StatusBadge
-            key={tag}
-            label={t(tag)}
-            autoColor={tag}
-            copyable={false}
-            size='sm'
-          />
-        ))}
       </div>
 
       <div className='bg-muted/20 mt-3 rounded-lg border p-3'>
@@ -210,7 +201,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               </div>
             </div>
             <div className='text-muted-foreground/50 text-[10px]'>
-              / 1M input and output tokens
+              {t('/ 1M input and output tokens')}
             </div>
           </div>
         ) : sdkmaxPrice ? (
@@ -223,7 +214,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               {stripTrailingZeros(formatCurrencyFromUSD(sdkmaxPrice.output))}
             </div>
             <div className='text-muted-foreground/50 text-[10px]'>
-              / 1M input and output tokens
+              {t('/ 1M input and output tokens')}
             </div>
           </div>
         ) : (
