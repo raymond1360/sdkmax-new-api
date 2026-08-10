@@ -126,6 +126,34 @@ Backend URL:
 
 The app auto-loads `.env` from the repository root through `godotenv`.
 
+## Unified Local Start
+
+Use this script as the default way to run SDKMAX locally:
+
+```powershell
+cd D:\sdkmax\new-api
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local-dev.ps1
+```
+
+The script enforces a single local entrypoint for `localhost:3000`:
+
+- stops stale `.test\new-api-local*.exe` processes from this repository;
+- refuses to continue if an unrelated process owns port `3000`;
+- builds `web/default`;
+- builds the backend as `.test\new-api-local-current.exe`;
+- starts that fixed binary;
+- verifies `/api/status` and `/pricing`.
+
+After using this script, `localhost:3000` should always point to the current
+Git checkout and commit, not an older task-specific test binary.
+
+For a faster restart after an already verified frontend build:
+
+```powershell
+cd D:\sdkmax\new-api
+powershell -ExecutionPolicy Bypass -File .\scripts\start-local-dev.ps1 -SkipFrontendBuild
+```
+
 ## Frontend
 
 The default frontend is in `web/default`.

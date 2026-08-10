@@ -20,11 +20,22 @@ import { useEffect, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
+import {
+  ChevronDown,
+  KeyRound,
+  ListChecks,
+  Settings2,
+  WalletCards,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels, getUserGroups } from '@/lib/api'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import {
+  SDKMAX_MODEL_COLLECTIONS,
+  getCollectionModelNames,
+  type SdkmaxModelCollectionId,
+} from '@/lib/sdkmax-model-collections'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
@@ -99,6 +110,8 @@ export function ApiKeysMutateDrawer({
   const { status } = useStatus()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [selectedScenario, setSelectedScenario] =
+    useState<SdkmaxModelCollectionId | null>(null)
   const defaultUseAutoGroup = status?.default_use_auto_group === true
 
   // Fetch models
@@ -145,6 +158,7 @@ export function ApiKeysMutateDrawer({
       form.reset(
         getApiKeyFormDefaultValues(defaultUseAutoGroup && backendHasAuto)
       )
+      setSelectedScenario(null)
     }
   }, [open, isUpdate, currentRow, form, defaultUseAutoGroup, backendHasAuto])
 
@@ -257,6 +271,53 @@ export function ApiKeysMutateDrawer({
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const selectedGroup = form.watch('group')
   const unlimitedQuota = form.watch('unlimited_quota')
+  const selectedModelLimits = form.watch('model_limits') || []
+
+  const applyScenarioPreset = (collectionId: SdkmaxModelCollectionId) => {
+    setSelectedScenario(collectionId)
+    const selectedModels = getCollectionModelNames(models, collectionId, 16)
+    form.setValue('model_limits', selectedModels, { shouldDirty: true })
+    if (!form.getValues('name')) {
+      const collection = SDKMAX_MODEL_COLLECTIONS.find(
+        (item) => item.id === collectionId
+      )
+      form.setValue(
+        'name',
+        collection ? `${t(collection.title)} API Key` : 'SDKMAX API Key',
+        { shouldDirty: true }
+      )
+    }
+    if (selectedModels.length > 0) {
+      setAdvancedOpen(true)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || isUpdate || models.length === 0) return
+    if (typeof window === 'undefined') return
+
+    const raw = window.sessionStorage.getItem('sdkmax.apiKeyPreset')
+    if (!raw) return
+
+    window.sessionStorage.removeItem('sdkmax.apiKeyPreset')
+    try {
+      const preset = JSON.parse(raw) as { models?: string[]; source?: string }
+      const selectedModels = (preset.models || []).filter((modelName) =>
+        models.includes(modelName)
+      )
+      if (selectedModels.length === 0) return
+      setSelectedScenario(null)
+      form.setValue('model_limits', selectedModels, { shouldDirty: true })
+      if (!form.getValues('name')) {
+        form.setValue('name', t('Pricing selection API Key'), {
+          shouldDirty: true,
+        })
+      }
+      setAdvancedOpen(true)
+    } catch {
+      window.sessionStorage.removeItem('sdkmax.apiKeyPreset')
+    }
+  }, [form, isUpdate, models, open, t])
 
   return (
     <Sheet
@@ -441,6 +502,66 @@ export function ApiKeysMutateDrawer({
                 />
               )}
             </SideDrawerSection>
+
+            {!isUpdate && (
+              <SideDrawerSection>
+                <SideDrawerSectionHeader
+                  title={t('Scenario Templates')}
+                  description={t(
+                    'Choose a model collection before creating the key.'
+                  )}
+                  icon={<ListChecks className='size-4' />}
+                />
+                <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
+                  {SDKMAX_MODEL_COLLECTIONS.map((collection) => {
+                    const count = collection.allModels
+                      ? models.length
+                      : getCollectionModelNames(
+                          models,
+                          collection.id,
+                          99
+                        ).length
+                    const active = selectedScenario === collection.id
+                    return (
+                      <button
+                        key={collection.id}
+                        type='button'
+                        onClick={() => applyScenarioPreset(collection.id)}
+                        disabled={count === 0}
+                        className={cn(
+                          'rounded-lg border p-3 text-left transition-colors',
+                          active
+                            ? 'border-primary bg-primary/5'
+                            : 'hover:bg-muted/40',
+                          count === 0 && 'cursor-not-allowed opacity-50'
+                        )}
+                      >
+                        <div className='flex items-center justify-between gap-2'>
+                          <span className='text-sm font-medium'>
+                            {t(collection.title)}
+                          </span>
+                          <span className='text-muted-foreground text-xs tabular-nums'>
+                            {count}
+                          </span>
+                        </div>
+                        <p className='text-muted-foreground mt-1 line-clamp-2 text-xs'>
+                          {t(collection.intent)}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className='text-muted-foreground text-xs'>
+                  {selectedModelLimits.length > 0
+                    ? t('{{count}} models will be allowed by this key.', {
+                        count: selectedModelLimits.length,
+                      })
+                    : t(
+                        'Leave unselected to allow all models available to your group.'
+                      )}
+                </p>
+              </SideDrawerSection>
+            )}
 
             <SideDrawerSection>
               <SideDrawerSectionHeader

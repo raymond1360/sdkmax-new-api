@@ -295,3 +295,39 @@ export function formatRequestPrice(
     abbreviate: false,
   })
 }
+
+export function getSdkmaxTokenPriceSnapshot(model: PricingModel): {
+  input: number
+  output: number
+} | null {
+  if (model.billing_mode === 'tiered_expr' && model.billing_expr) {
+    const inputMatch = model.billing_expr.match(/\bp\s*\*\s*([\d.eE+-]+)/)
+    const outputMatch = model.billing_expr.match(/\bc\s*\*\s*([\d.eE+-]+)/)
+    const input = inputMatch ? Number(inputMatch[1]) : NaN
+    const output = outputMatch ? Number(outputMatch[1]) : NaN
+
+    if (Number.isFinite(input) && Number.isFinite(output)) {
+      return { input, output }
+    }
+
+    return null
+  }
+
+  if (model.quota_type !== QUOTA_TYPE_VALUES.TOKEN) {
+    return null
+  }
+
+  const enableGroups = Array.isArray(model.enable_groups)
+    ? model.enable_groups
+    : []
+  const groupRatio = model.group_ratio || {}
+  const minRatio = getMinGroupRatio(enableGroups, groupRatio)
+  const input = calculateTokenPrice(model, 'input', minRatio)
+  const output = calculateTokenPrice(model, 'output', minRatio)
+
+  if (!Number.isFinite(input) || !Number.isFinite(output)) {
+    return null
+  }
+
+  return { input, output }
+}
