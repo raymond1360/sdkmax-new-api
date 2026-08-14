@@ -315,6 +315,7 @@ export function ModelAvailabilityCard() {
             <TableHeader>
               <TableRow>
                 <TableHead>{t('Model')}</TableHead>
+                <TableHead>{t('Actions')}</TableHead>
                 <TableHead>{t('Source')}</TableHead>
                 <TableHead>{t('Mode')}</TableHead>
                 <TableHead>{t('Capabilities')}</TableHead>
@@ -325,7 +326,6 @@ export function ModelAvailabilityCard() {
                 <TableHead>{t('Counters')}</TableHead>
                 <TableHead>{t('Last Tested')}</TableHead>
                 <TableHead>{t('Last Error')}</TableHead>
-                <TableHead className='text-right'>{t('Actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -336,6 +336,14 @@ export function ModelAvailabilityCard() {
                     title={model.model_id}
                   >
                     {model.model_id}
+                  </TableCell>
+                  <TableCell>
+                    <ActionButtons
+                      model={model}
+                      disabled={isMutating}
+                      onToggle={handleToggle}
+                      onRetest={handleRetest}
+                    />
                   </TableCell>
                   <TableCell>{model.source || '-'}</TableCell>
                   <TableCell>{model.api_mode || '-'}</TableCell>
@@ -385,14 +393,6 @@ export function ModelAvailabilityCard() {
                     title={model.last_error || model.last_failure_reason}
                   >
                     {model.last_error || model.last_failure_reason || '-'}
-                  </TableCell>
-                  <TableCell className='text-right'>
-                    <ActionButtons
-                      model={model}
-                      disabled={isMutating}
-                      onToggle={handleToggle}
-                      onRetest={handleRetest}
-                    />
                   </TableCell>
                 </TableRow>
               ))}
