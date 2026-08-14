@@ -28,6 +28,87 @@ type AbilityWithChannel struct {
 	ChannelType int `json:"channel_type"`
 }
 
+func getModelMetadataMapForNames(modelNames []string) map[string]*Model {
+	metaMap := make(map[string]*Model)
+	if len(modelNames) == 0 {
+		return metaMap
+	}
+	var models []*Model
+	if err := DB.Find(&models).Error; err != nil {
+		common.SysLog("load model metadata failed: " + err.Error())
+		return metaMap
+	}
+	var prefixList, suffixList, containsList []*Model
+	for _, m := range models {
+		if m.NameRule == NameRuleExact {
+			metaMap[m.ModelName] = m
+			continue
+		}
+		switch m.NameRule {
+		case NameRulePrefix:
+			prefixList = append(prefixList, m)
+		case NameRuleSuffix:
+			suffixList = append(suffixList, m)
+		case NameRuleContains:
+			containsList = append(containsList, m)
+		}
+	}
+	for _, modelName := range modelNames {
+		if _, exists := metaMap[modelName]; exists {
+			continue
+		}
+		for _, m := range prefixList {
+			if strings.HasPrefix(modelName, m.ModelName) {
+				metaMap[modelName] = m
+				break
+			}
+		}
+		if _, exists := metaMap[modelName]; exists {
+			continue
+		}
+		for _, m := range suffixList {
+			if strings.HasSuffix(modelName, m.ModelName) {
+				metaMap[modelName] = m
+				break
+			}
+		}
+		if _, exists := metaMap[modelName]; exists {
+			continue
+		}
+		for _, m := range containsList {
+			if strings.Contains(modelName, m.ModelName) {
+				metaMap[modelName] = m
+				break
+			}
+		}
+	}
+	return metaMap
+}
+
+func filterCustomerVisibleModelNames(modelNames []string) []string {
+	availabilityMap := map[string]ModelAvailability{}
+	if ModelAvailabilityTableExists() {
+		var err error
+		availabilityMap, err = GetModelAvailabilityMap()
+		if err != nil {
+			common.SysLog("load model availability failed: " + err.Error())
+			availabilityMap = map[string]ModelAvailability{}
+		}
+	}
+	metaMap := getModelMetadataMapForNames(modelNames)
+	filtered := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		if availability, ok := availabilityMap[modelName]; ok && !availability.CustomerVisible {
+			continue
+		}
+		if meta, ok := metaMap[modelName]; ok && meta.Status != 1 {
+			continue
+		}
+		filtered = append(filtered, modelName)
+	}
+	return filtered
+}
+
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
 	err := DB.Table("abilities").
@@ -38,20 +119,21 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	if err != nil {
 		return abilities, err
 	}
-	if ModelAvailabilityTableExists() {
-		availabilityMap, mapErr := GetModelAvailabilityMap()
-		if mapErr != nil {
-			return abilities, mapErr
-		}
-		filtered := make([]AbilityWithChannel, 0, len(abilities))
-		for _, ability := range abilities {
-			if availability, ok := availabilityMap[ability.Model]; ok && !availability.CustomerVisible {
-				continue
-			}
+	modelNames := make([]string, 0, len(abilities))
+	for _, ability := range abilities {
+		modelNames = append(modelNames, ability.Model)
+	}
+	visibleModels := make(map[string]struct{})
+	for _, modelName := range filterCustomerVisibleModelNames(modelNames) {
+		visibleModels[modelName] = struct{}{}
+	}
+	filtered := make([]AbilityWithChannel, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := visibleModels[ability.Model]; ok {
 			filtered = append(filtered, ability)
 		}
-		abilities = filtered
 	}
+	abilities = filtered
 	return abilities, err
 }
 
@@ -60,6 +142,12 @@ func GetGroupEnabledModels(group string) []string {
 	// Find distinct models
 	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
 	return models
+}
+
+func GetCustomerVisibleGroupModels(group string) []string {
+	var models []string
+	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	return filterCustomerVisibleModelNames(models)
 }
 
 func GetEnabledModels() []string {
