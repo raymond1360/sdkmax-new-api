@@ -122,6 +122,9 @@ func main() {
 	// OpenRouter model catalog and pricing sync task
 	service.StartOpenRouterModelSyncTask()
 
+	// Model availability health checks are disabled by default until operator enables them.
+	service.StartModelHealthCheckTask()
+
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)

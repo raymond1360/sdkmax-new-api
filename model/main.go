@@ -284,6 +284,8 @@ func migrateDB() error {
 		&OpenRouterModel{},
 		&OpenRouterModelMultiplier{},
 		&OpenRouterSyncLog{},
+		&ModelAvailability{},
+		&ModelAvailabilityAuditLog{},
 	)
 	if err != nil {
 		return err
@@ -296,6 +298,11 @@ func migrateDB() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if count, err := BootstrapModelAvailabilityFromAuditCSV(""); err == nil && count > 0 {
+		common.SysLog(fmt.Sprintf("model availability bootstrap created %d rows from audit csv", count))
+	} else if err != nil {
+		common.SysLog("model availability bootstrap skipped: " + err.Error())
 	}
 	return nil
 }
@@ -336,6 +343,8 @@ func migrateDBFast() error {
 		{&OpenRouterModel{}, "OpenRouterModel"},
 		{&OpenRouterModelMultiplier{}, "OpenRouterModelMultiplier"},
 		{&OpenRouterSyncLog{}, "OpenRouterSyncLog"},
+		{&ModelAvailability{}, "ModelAvailability"},
+		{&ModelAvailabilityAuditLog{}, "ModelAvailabilityAuditLog"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

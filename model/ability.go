@@ -30,11 +30,15 @@ type AbilityWithChannel struct {
 
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
-	err := DB.Table("abilities").
+	query := DB.Table("abilities").
 		Select("abilities.*, channels.type as channel_type").
 		Joins("left join channels on abilities.channel_id = channels.id").
-		Where("abilities.enabled = ?", true).
-		Scan(&abilities).Error
+		Where("abilities.enabled = ?", true)
+	if ModelAvailabilityTableExists() {
+		query = query.Joins("left join model_availabilities on model_availabilities.model_id = abilities.model").
+			Where("(model_availabilities.id IS NULL OR model_availabilities.customer_visible = ?)", true)
+	}
+	err := query.Scan(&abilities).Error
 	return abilities, err
 }
 
@@ -89,14 +93,21 @@ func getPriority(group string, model string, retry int) (int, error) {
 }
 
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+	visibleScope := func(db *gorm.DB) *gorm.DB {
+		if !ModelAvailabilityTableExists() {
+			return db
+		}
+		return db.Joins("left join model_availabilities on model_availabilities.model_id = abilities.model").
+			Where("(model_availabilities.id IS NULL OR model_availabilities.customer_visible = ?)", true)
+	}
+	maxPrioritySubQuery := visibleScope(DB.Model(&Ability{})).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and abilities.enabled = ?", group, model, true)
+	channelQuery := visibleScope(DB).Where(commonGroupCol+" = ? and model = ? and abilities.enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
 	if retry != 0 {
 		priority, err := getPriority(group, model, retry)
 		if err != nil {
 			return nil, err
 		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			channelQuery = visibleScope(DB).Where(commonGroupCol+" = ? and model = ? and abilities.enabled = ? and priority = ?", group, model, true, priority)
 		}
 	}
 

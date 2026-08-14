@@ -31,8 +31,20 @@ func InitChannelCache() {
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
+	availabilityMap := map[string]ModelAvailability{}
+	if ModelAvailabilityTableExists() {
+		var err error
+		availabilityMap, err = GetModelAvailabilityMap()
+		if err != nil {
+			common.SysLog("load model availability for channel cache failed: " + err.Error())
+			availabilityMap = map[string]ModelAvailability{}
+		}
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
+		if availability, ok := availabilityMap[ability.Model]; ok && !availability.CustomerVisible {
+			continue
+		}
 		groups[ability.Group] = true
 	}
 	newGroup2model2channels := make(map[string]map[string][]int)
@@ -47,6 +59,9 @@ func InitChannelCache() {
 		for _, group := range groups {
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
+				if availability, ok := availabilityMap[model]; ok && !availability.CustomerVisible {
+					continue
+				}
 				if _, ok := newGroup2model2channels[group][model]; !ok {
 					newGroup2model2channels[group][model] = make([]int, 0)
 				}
