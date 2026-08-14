@@ -234,6 +234,14 @@ func SetApiRouter(router *gin.Engine) {
 			openRouterSyncRoute.GET("/channels", controller.GetOpenRouterChannels)
 			openRouterSyncRoute.PUT("/channel", controller.UpdateOpenRouterUnifiedChannel)
 		}
+		modelAvailabilityRoute := apiRouter.Group("/model_availability")
+		modelAvailabilityRoute.Use(middleware.AdminAuth())
+		{
+			modelAvailabilityRoute.GET("/", controller.ListModelAvailability)
+			modelAvailabilityRoute.POST("/admin_enabled", controller.UpdateModelAvailabilityAdminEnabled)
+			modelAvailabilityRoute.POST("/retest", controller.TriggerModelAvailabilityRetest)
+			modelAvailabilityRoute.POST("/bootstrap_audit", middleware.RootAuth(), controller.BootstrapModelAvailabilityFromAudit)
+		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{

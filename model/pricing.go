@@ -36,6 +36,12 @@ type Pricing struct {
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	CustomerVisible        bool                    `json:"customer_visible,omitempty"`
+	ConnectivityStatus     string                  `json:"connectivity_status,omitempty"`
+	SDKMAXSupportStatus    string                  `json:"sdkmax_support_status,omitempty"`
+	APIMode                string                  `json:"api_mode,omitempty"`
+	Capabilities           string                  `json:"capabilities,omitempty"`
+	VisibilityReason       string                  `json:"visibility_reason,omitempty"`
 }
 
 type PricingVendor struct {
@@ -189,6 +195,15 @@ func updatePricing() {
 	}
 
 	modelGroupsMap := make(map[string]*types.Set[string])
+	availabilityMap := map[string]ModelAvailability{}
+	if ModelAvailabilityTableExists() {
+		var availabilityErr error
+		availabilityMap, availabilityErr = GetModelAvailabilityMap()
+		if availabilityErr != nil {
+			common.SysLog(fmt.Sprintf("GetModelAvailabilityMap error: %v", availabilityErr))
+			availabilityMap = map[string]ModelAvailability{}
+		}
+	}
 
 	for _, ability := range enableAbilities {
 		groups, ok := modelGroupsMap[ability.Model]
@@ -291,6 +306,18 @@ func updatePricing() {
 			ModelName:              model,
 			EnableGroup:            groups.Items(),
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
+			CustomerVisible:        true,
+		}
+		if availability, ok := availabilityMap[model]; ok {
+			pricing.CustomerVisible = availability.CustomerVisible
+			pricing.ConnectivityStatus = availability.ConnectivityStatus
+			pricing.SDKMAXSupportStatus = availability.SDKMAXSupportStatus
+			pricing.APIMode = availability.APIMode
+			pricing.Capabilities = availability.Capabilities
+			pricing.VisibilityReason = availability.VisibilityReason
+			if !availability.CustomerVisible {
+				continue
+			}
 		}
 
 		// 补充模型元数据（描述、标签、供应商、状态）

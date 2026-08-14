@@ -465,3 +465,54 @@ export type OpenRouterChannelsResponse = {
   message?: string
   data: OpenRouterSyncChannel[]
 }
+
+export type ModelAvailability = {
+  id: number
+  model_id: string
+  source: string
+  admin_enabled: boolean
+  connectivity_status: string
+  sdkmax_support_status: string
+  api_mode: string
+  capabilities: string
+  customer_visible: boolean
+  visibility_reason: string
+  consecutive_failures: number
+  consecutive_real_failures: number
+  consecutive_successes: number
+  last_tested_at: number
+  last_success_at: number
+  last_failure_at: number
+  last_failure_reason: string
+  last_http_status: number
+  last_error: string
+  last_upstream_seen_at: number
+  last_retest_requested_at: number
+  last_retest_requested_by_id: number
+  last_retest_requested_by_name: string
+  created_time: number
+  updated_time: number
+}
+
+export type ModelAvailabilityListParams = {
+  page: number
+  page_size: number
+  keyword?: string
+  connectivity_status?: string
+  sdkmax_support_status?: string
+  customer_visible?: string
+}
+
+export type ModelAvailabilityListResponse = {
+  success: boolean
+  message?: string
+  data: ModelAvailability[]
+  total: number
+}
+
+export type ModelAvailabilityActionResponse = {
+  success: boolean
+  message?: string
+  data?: ModelAvailability
+  queued_at?: number
+}

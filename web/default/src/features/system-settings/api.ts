@@ -21,6 +21,9 @@ import type {
   ConfirmPaymentComplianceResponse,
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
+  ModelAvailabilityActionResponse,
+  ModelAvailabilityListParams,
+  ModelAvailabilityListResponse,
   OpenRouterChannelsResponse,
   OpenRouterSyncResponse,
   OpenRouterSyncStateResponse,
@@ -142,6 +145,45 @@ export async function updateOpenRouterUnifiedChannel(channel_id: number) {
   const res = await api.put<UpdateOptionResponse>(
     '/api/openrouter_sync/channel',
     { channel_id },
+    {
+      skipErrorHandler: true,
+    }
+  )
+  return res.data
+}
+
+export async function getModelAvailability(
+  params: ModelAvailabilityListParams
+) {
+  const res = await api.get<ModelAvailabilityListResponse>(
+    '/api/model_availability/',
+    {
+      params: { ...params, _t: Date.now() },
+      skipErrorHandler: true,
+      disableDuplicate: true,
+    }
+  )
+  return res.data
+}
+
+export async function updateModelAvailabilityAdminEnabled(
+  model_id: string,
+  admin_enabled: boolean
+) {
+  const res = await api.post<ModelAvailabilityActionResponse>(
+    '/api/model_availability/admin_enabled',
+    { model_id, admin_enabled },
+    {
+      skipErrorHandler: true,
+    }
+  )
+  return res.data
+}
+
+export async function triggerModelAvailabilityRetest(model_id: string) {
+  const res = await api.post<ModelAvailabilityActionResponse>(
+    '/api/model_availability/retest',
+    { model_id },
     {
       skipErrorHandler: true,
     }
