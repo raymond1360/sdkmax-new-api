@@ -1,6 +1,8 @@
 package model
 
 import (
+	"bytes"
+	_ "embed"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -13,6 +15,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+//go:embed audit_data/model-failure-reclassification-202608.csv
+var embeddedModelAvailabilityAuditCSV []byte
 
 const (
 	ModelAvailabilitySourceOpenRouter = "openrouter"
@@ -592,21 +597,38 @@ func createModelAvailabilityAuditLogWithOperator(db *gorm.DB, previous, next Mod
 }
 
 func BootstrapModelAvailabilityFromAuditCSV(path string) (int, error) {
-	if strings.TrimSpace(path) == "" {
+	explicitPath := strings.TrimSpace(path) != ""
+	envPath := strings.TrimSpace(os.Getenv("MODEL_AVAILABILITY_AUDIT_CSV_PATH"))
+	if !explicitPath {
 		path = defaultModelAvailabilityAuditCSVPath()
+		explicitPath = envPath != ""
 	}
-	file, err := os.Open(path)
+	records, err := readModelAvailabilityAuditCSVRecords(path, !explicitPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
-	records, err := csv.NewReader(file).ReadAll()
-	if err != nil {
-		return 0, err
+	return bootstrapModelAvailabilityFromAuditCSVRecords(records)
+}
+
+func readModelAvailabilityAuditCSVRecords(path string, allowEmbeddedFallback bool) ([][]string, error) {
+	file, err := os.Open(path)
+	if err == nil {
+		defer file.Close()
+		return csv.NewReader(file).ReadAll()
 	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if allowEmbeddedFallback && len(embeddedModelAvailabilityAuditCSV) > 0 {
+		return csv.NewReader(bytes.NewReader(embeddedModelAvailabilityAuditCSV)).ReadAll()
+	}
+	return nil, err
+}
+
+func bootstrapModelAvailabilityFromAuditCSVRecords(records [][]string) (int, error) {
 	if len(records) < 2 {
 		return 0, nil
 	}

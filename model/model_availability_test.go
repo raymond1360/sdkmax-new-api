@@ -237,6 +237,35 @@ func TestBootstrapModelAvailabilityFromAuditCSVParsesRealHeaders(t *testing.T) {
 	}
 }
 
+func TestBootstrapModelAvailabilityFromEmbeddedAuditCSVFallback(t *testing.T) {
+	db := setupAvailabilityTestDB(t)
+	missingPath := filepath.Join(t.TempDir(), "missing.csv")
+
+	records, err := readModelAvailabilityAuditCSVRecords(missingPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 132 {
+		t.Fatalf("embedded records = %d, want 132 including header", len(records))
+	}
+
+	count, err := bootstrapModelAvailabilityFromAuditCSVRecords(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 131 {
+		t.Fatalf("count = %d, want 131", count)
+	}
+
+	var hidden int64
+	if err := db.Model(&ModelAvailability{}).Where("customer_visible = ?", false).Count(&hidden).Error; err != nil {
+		t.Fatal(err)
+	}
+	if hidden == 0 {
+		t.Fatal("embedded audit fallback should hide unsupported/problem models")
+	}
+}
+
 func TestBackfillModelAvailabilityFromEnabledAbilitiesPreservesCurrentVisibleCatalog(t *testing.T) {
 	db := setupAvailabilityTestDB(t)
 	if err := db.Create(&Ability{Group: "default", Model: "openai/realtime", ChannelId: 1, Enabled: true}).Error; err != nil {
