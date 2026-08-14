@@ -65,7 +65,9 @@ func UpdateModelAvailabilityAdminEnabled(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	row, err := model.SetModelAvailabilityAdminEnabled(req.ModelID, req.AdminEnabled)
+	operatorID := c.GetInt("id")
+	operatorName, _ := model.GetUsernameById(operatorID, false)
+	row, err := model.SetModelAvailabilityAdminEnabled(req.ModelID, req.AdminEnabled, operatorID, operatorName)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -85,24 +87,19 @@ func TriggerModelAvailabilityRetest(c *gin.Context) {
 		return
 	}
 	now := common.GetTimestamp()
-	var row model.ModelAvailability
-	if err := model.DB.Where("model_id = ?", modelID).First(&row).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	row.ConnectivityStatus = model.ConnectivityTesting
-	row.CustomerVisible, row.VisibilityReason = model.ResolveModelVisibility(row)
-	row.LastTestedAt = now
-	row.UpdatedTime = now
-	if err := model.DB.Save(&row).Error; err != nil {
+	operatorID := c.GetInt("id")
+	operatorName, _ := model.GetUsernameById(operatorID, false)
+	row, err := model.MarkModelAvailabilityRetestRequested(modelID, operatorID, operatorName)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 	model.InvalidatePricingCache()
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    row,
-		"message": "model marked for health retest; asynchronous checker must record the final result",
+		"success":   true,
+		"data":      row,
+		"message":   "model retest requested; current visibility is preserved until a health checker records the final result",
+		"queued_at": now,
 	})
 }
 

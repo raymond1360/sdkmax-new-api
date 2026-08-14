@@ -7,14 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
 	ModelAvailabilitySourceOpenRouter = "openrouter"
 	ModelAvailabilitySourceAudit      = "audit"
+	ModelAvailabilitySourceBackfill   = "backfill"
 
 	ConnectivityUnknown         = "unknown"
 	ConnectivityUntested        = "untested"
@@ -59,30 +62,35 @@ const (
 	VisibilityUpstreamModelMissing = "UPSTREAM_MODEL_MISSING"
 	VisibilityRateLimitedRetest    = "RATE_LIMITED_RETEST"
 	VisibilityNoProviderRetest     = "NO_PROVIDER_RETEST"
+	VisibilityRetestQueued         = "RETEST_QUEUED"
 )
 
 type ModelAvailability struct {
-	Id                   int    `json:"id"`
-	ModelID              string `json:"model_id" gorm:"type:varchar(255);uniqueIndex;not null"`
-	Source               string `json:"source" gorm:"type:varchar(64);index;not null;default:''"`
-	AdminEnabled         bool   `json:"admin_enabled" gorm:"not null;default:true"`
-	ConnectivityStatus   string `json:"connectivity_status" gorm:"type:varchar(64);index;not null;default:'unknown'"`
-	SDKMAXSupportStatus  string `json:"sdkmax_support_status" gorm:"type:varchar(64);index;not null;default:'unverified'"`
-	APIMode              string `json:"api_mode" gorm:"type:varchar(64);index;not null;default:'realtime'"`
-	Capabilities         string `json:"capabilities" gorm:"type:text"`
-	CustomerVisible      bool   `json:"customer_visible" gorm:"index;not null;default:false"`
-	VisibilityReason     string `json:"visibility_reason" gorm:"type:varchar(128);index;not null;default:''"`
-	ConsecutiveFailures  int    `json:"consecutive_failures" gorm:"not null;default:0"`
-	ConsecutiveSuccesses int    `json:"consecutive_successes" gorm:"not null;default:0"`
-	LastTestedAt         int64  `json:"last_tested_at" gorm:"index"`
-	LastSuccessAt        int64  `json:"last_success_at" gorm:"index"`
-	LastFailureAt        int64  `json:"last_failure_at" gorm:"index"`
-	LastFailureReason    string `json:"last_failure_reason" gorm:"type:varchar(128);index"`
-	LastHTTPStatus       int    `json:"last_http_status" gorm:"index"`
-	LastError            string `json:"last_error" gorm:"type:text"`
-	LastUpstreamSeenAt   int64  `json:"last_upstream_seen_at" gorm:"index"`
-	CreatedTime          int64  `json:"created_time" gorm:"bigint"`
-	UpdatedTime          int64  `json:"updated_time" gorm:"bigint"`
+	Id                        int    `json:"id"`
+	ModelID                   string `json:"model_id" gorm:"type:varchar(255);uniqueIndex;not null"`
+	Source                    string `json:"source" gorm:"type:varchar(64);index;not null;default:''"`
+	AdminEnabled              bool   `json:"admin_enabled" gorm:"not null;default:true"`
+	ConnectivityStatus        string `json:"connectivity_status" gorm:"type:varchar(64);index;not null;default:'unknown'"`
+	SDKMAXSupportStatus       string `json:"sdkmax_support_status" gorm:"type:varchar(64);index;not null;default:'unverified'"`
+	APIMode                   string `json:"api_mode" gorm:"type:varchar(64);index;not null;default:'realtime'"`
+	Capabilities              string `json:"capabilities" gorm:"type:text"`
+	CustomerVisible           bool   `json:"customer_visible" gorm:"index;not null;default:false"`
+	VisibilityReason          string `json:"visibility_reason" gorm:"type:varchar(128);index;not null;default:''"`
+	ConsecutiveFailures       int    `json:"consecutive_failures" gorm:"not null;default:0"`
+	ConsecutiveRealFailures   int    `json:"consecutive_real_failures" gorm:"not null;default:0"`
+	ConsecutiveSuccesses      int    `json:"consecutive_successes" gorm:"not null;default:0"`
+	LastTestedAt              int64  `json:"last_tested_at" gorm:"index"`
+	LastSuccessAt             int64  `json:"last_success_at" gorm:"index"`
+	LastFailureAt             int64  `json:"last_failure_at" gorm:"index"`
+	LastFailureReason         string `json:"last_failure_reason" gorm:"type:varchar(128);index"`
+	LastHTTPStatus            int    `json:"last_http_status" gorm:"index"`
+	LastError                 string `json:"last_error" gorm:"type:text"`
+	LastUpstreamSeenAt        int64  `json:"last_upstream_seen_at" gorm:"index"`
+	LastRetestRequestedAt     int64  `json:"last_retest_requested_at" gorm:"index"`
+	LastRetestRequestedByID   int    `json:"last_retest_requested_by_id" gorm:"index"`
+	LastRetestRequestedByName string `json:"last_retest_requested_by_name" gorm:"type:varchar(128)"`
+	CreatedTime               int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime               int64  `json:"updated_time" gorm:"bigint"`
 }
 
 type ModelAvailabilityAuditLog struct {
@@ -95,6 +103,8 @@ type ModelAvailabilityAuditLog struct {
 	NextStatus      string `json:"next_status" gorm:"type:varchar(64)"`
 	Reason          string `json:"reason" gorm:"type:varchar(128);index"`
 	Detail          string `json:"detail" gorm:"type:text"`
+	OperatorID      int    `json:"operator_id" gorm:"index"`
+	OperatorName    string `json:"operator_name" gorm:"type:varchar(128)"`
 	CreatedTime     int64  `json:"created_time" gorm:"bigint;index"`
 }
 
@@ -182,13 +192,16 @@ func ResolveModelVisibility(a ModelAvailability) (bool, string) {
 		}
 		return true, VisibilityVisible
 	case ConnectivityDegraded, ConnectivityRateLimited, ConnectivityNoProvider, ConnectivityTimeout, ConnectivityUpstreamError:
+		if (a.ConnectivityStatus == ConnectivityTimeout || a.ConnectivityStatus == ConnectivityUpstreamError) && a.ConsecutiveRealFailures >= 3 {
+			return false, VisibilityConnectivityFailed
+		}
 		return true, a.VisibilityReason
 	case ConnectivityWrongEndpoint:
 		return false, VisibilityWrongEndpoint
 	case ConnectivityWrongPayload:
 		return false, VisibilityWrongPayload
 	case ConnectivityFailed:
-		if a.ConsecutiveFailures >= 3 {
+		if a.ConsecutiveRealFailures >= 3 {
 			return false, VisibilityConnectivityFailed
 		}
 		return true, a.VisibilityReason
@@ -200,6 +213,8 @@ func ResolveModelVisibility(a ModelAvailability) (bool, string) {
 		return false, VisibilityHealthCheckPending
 	}
 }
+
+var modelAvailabilityTableExistsCache sync.Map
 
 func ModelAutoVisibilityEnabled() bool {
 	common.OptionMapRWMutex.RLock()
@@ -218,7 +233,13 @@ func ModelAvailabilityTableExists() bool {
 	if DB == nil {
 		return false
 	}
-	return DB.Migrator().HasTable(&ModelAvailability{})
+	cacheKey := fmt.Sprintf("%p", DB)
+	if cached, ok := modelAvailabilityTableExistsCache.Load(cacheKey); ok {
+		return cached.(bool)
+	}
+	exists := DB.Migrator().HasTable(&ModelAvailability{})
+	modelAvailabilityTableExistsCache.Store(cacheKey, exists)
+	return exists
 }
 
 func ApplyHealthResultToAvailability(current ModelAvailability, result ModelHealthCheckResult) ModelAvailability {
@@ -235,6 +256,7 @@ func ApplyHealthResultToAvailability(current ModelAvailability, result ModelHeal
 		next.ConnectivityStatus = ConnectivityConnected
 		next.ConsecutiveSuccesses++
 		next.ConsecutiveFailures = 0
+		next.ConsecutiveRealFailures = 0
 		next.LastSuccessAt = now
 		next.LastFailureReason = ""
 		next.LastError = ""
@@ -249,21 +271,26 @@ func ApplyHealthResultToAvailability(current ModelAvailability, result ModelHeal
 		next.LastFailureReason = strings.TrimSpace(result.FailureReason)
 		switch status {
 		case ConnectivityUpstreamMissing, ConnectivityWrongEndpoint, ConnectivityWrongPayload, ConnectivityBatchRequired, ConnectivityUnsupported:
+			next.ConsecutiveRealFailures = 0
 			next.ConnectivityStatus = status
 		case ConnectivityRateLimited:
+			next.ConsecutiveRealFailures = 0
 			next.ConnectivityStatus = ConnectivityDegraded
 			next.VisibilityReason = VisibilityRateLimitedRetest
 		case ConnectivityNoProvider:
+			next.ConsecutiveRealFailures = 0
 			next.ConnectivityStatus = ConnectivityDegraded
 			next.VisibilityReason = VisibilityNoProviderRetest
 		case ConnectivityTimeout, ConnectivityUpstreamError:
-			if next.ConsecutiveFailures >= 3 {
+			next.ConsecutiveRealFailures++
+			if next.ConsecutiveRealFailures >= 3 {
 				next.ConnectivityStatus = ConnectivityFailed
 			} else {
 				next.ConnectivityStatus = ConnectivityDegraded
 			}
 		default:
-			if next.ConsecutiveFailures >= 3 {
+			next.ConsecutiveRealFailures++
+			if next.ConsecutiveRealFailures >= 3 {
 				next.ConnectivityStatus = ConnectivityFailed
 			} else {
 				next.ConnectivityStatus = ConnectivityDegraded
@@ -283,6 +310,10 @@ func UpsertModelAvailabilityFromUpstream(tx *gorm.DB, upstream ModelAvailability
 	useDB := DB
 	if tx != nil {
 		useDB = tx
+	} else {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			return UpsertModelAvailabilityFromUpstream(tx, upstream)
+		})
 	}
 	now := upstream.SeenAt
 	if now == 0 {
@@ -297,23 +328,34 @@ func UpsertModelAvailabilityFromUpstream(tx *gorm.DB, upstream ModelAvailability
 		apiMode = APIModeRealtime
 	}
 	var existing ModelAvailability
-	err := useDB.Where("model_id = ?", modelID).First(&existing).Error
+	err := useDB.Clauses(clause.Locking{Strength: "UPDATE"}).Where("model_id = ?", modelID).First(&existing).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		status := ConnectivityUntested
+		successes := 0
+		visibleReason := ""
+		if !ModelAutoVisibilityEnabled() && supportStatusForAPIMode(apiMode) == SupportSupported && apiMode == APIModeRealtime {
+			status = ConnectivityConnected
+			successes = 2
+			visibleReason = VisibilityVisible
+		}
 		row := ModelAvailability{
 			ModelID:              modelID,
 			Source:               source,
 			AdminEnabled:         true,
-			ConnectivityStatus:   ConnectivityUntested,
+			ConnectivityStatus:   status,
 			SDKMAXSupportStatus:  supportStatusForAPIMode(apiMode),
 			APIMode:              apiMode,
 			Capabilities:         capabilitiesToText(upstream.Capabilities),
 			LastUpstreamSeenAt:   now,
 			ConsecutiveFailures:  0,
-			ConsecutiveSuccesses: 0,
+			ConsecutiveSuccesses: successes,
 			CreatedTime:          now,
 			UpdatedTime:          now,
 		}
 		row.CustomerVisible, row.VisibilityReason = ResolveModelVisibility(row)
+		if visibleReason != "" {
+			row.VisibilityReason = visibleReason
+		}
 		return useDB.Create(&row).Error
 	}
 	if err != nil {
@@ -328,6 +370,7 @@ func UpsertModelAvailabilityFromUpstream(tx *gorm.DB, upstream ModelAvailability
 	if existing.ConnectivityStatus == ConnectivityUpstreamMissing {
 		existing.ConnectivityStatus = ConnectivityUntested
 		existing.ConsecutiveFailures = 0
+		existing.ConsecutiveRealFailures = 0
 		existing.ConsecutiveSuccesses = 0
 	}
 	existing.CustomerVisible, existing.VisibilityReason = ResolveModelVisibility(existing)
@@ -379,9 +422,17 @@ func ApplyModelHealthCheckResult(tx *gorm.DB, modelID string, result ModelHealth
 	useDB := DB
 	if tx != nil {
 		useDB = tx
+	} else {
+		var row *ModelAvailability
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			var txErr error
+			row, txErr = ApplyModelHealthCheckResult(tx, modelID, result)
+			return txErr
+		})
+		return row, err
 	}
 	var current ModelAvailability
-	err := useDB.Where("model_id = ?", modelID).First(&current).Error
+	err := useDB.Clauses(clause.Locking{Strength: "UPDATE"}).Where("model_id = ?", modelID).First(&current).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		now := result.TestedAt
 		if now == 0 {
@@ -417,37 +468,78 @@ func ApplyModelHealthCheckResult(tx *gorm.DB, modelID string, result ModelHealth
 	return &next, nil
 }
 
-func SetModelAvailabilityAdminEnabled(modelID string, enabled bool) (*ModelAvailability, error) {
+func SetModelAvailabilityAdminEnabled(modelID string, enabled bool, operatorID int, operatorName string) (*ModelAvailability, error) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil, errors.New("model_id is required")
+	}
+	var updated *ModelAvailability
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		now := common.GetTimestamp()
+		var current ModelAvailability
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("model_id = ?", modelID).First(&current).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			current = ModelAvailability{
+				ModelID:             modelID,
+				Source:              ModelAvailabilitySourceOpenRouter,
+				ConnectivityStatus:  ConnectivityUnknown,
+				SDKMAXSupportStatus: SupportUnverified,
+				APIMode:             APIModeRealtime,
+				CreatedTime:         now,
+			}
+		} else if err != nil {
+			return err
+		}
+		previous := current
+		current.AdminEnabled = enabled
+		current.CustomerVisible, current.VisibilityReason = ResolveModelVisibility(current)
+		current.UpdatedTime = now
+		if err := tx.Save(&current).Error; err != nil {
+			return err
+		}
+		_ = createModelAvailabilityAuditLogWithOperator(tx, previous, current, "admin_update", current.VisibilityReason, operatorID, operatorName)
+		updated = &current
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	InvalidatePricingCache()
+	InitChannelCache()
+	return updated, nil
+}
+
+func MarkModelAvailabilityRetestRequested(modelID string, operatorID int, operatorName string) (*ModelAvailability, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return nil, errors.New("model_id is required")
 	}
 	now := common.GetTimestamp()
-	var current ModelAvailability
-	err := DB.Where("model_id = ?", modelID).First(&current).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		current = ModelAvailability{
-			ModelID:             modelID,
-			Source:              ModelAvailabilitySourceOpenRouter,
-			ConnectivityStatus:  ConnectivityUnknown,
-			SDKMAXSupportStatus: SupportUnverified,
-			APIMode:             APIModeRealtime,
-			CreatedTime:         now,
+	var updated *ModelAvailability
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var current ModelAvailability
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("model_id = ?", modelID).First(&current).Error; err != nil {
+			return err
 		}
-	} else if err != nil {
+		previous := current
+		current.LastRetestRequestedAt = now
+		current.LastRetestRequestedByID = operatorID
+		current.LastRetestRequestedByName = strings.TrimSpace(operatorName)
+		if current.VisibilityReason == "" || current.VisibilityReason == VisibilityVisible {
+			current.VisibilityReason = VisibilityRetestQueued
+		}
+		current.UpdatedTime = now
+		if err := tx.Save(&current).Error; err != nil {
+			return err
+		}
+		_ = createModelAvailabilityAuditLogWithOperator(tx, previous, current, "retest_requested", current.VisibilityReason, operatorID, operatorName)
+		updated = &current
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	previous := current
-	current.AdminEnabled = enabled
-	current.CustomerVisible, current.VisibilityReason = ResolveModelVisibility(current)
-	current.UpdatedTime = now
-	if err := DB.Save(&current).Error; err != nil {
-		return nil, err
-	}
-	_ = createModelAvailabilityAuditLog(DB, previous, current, "admin_update", current.VisibilityReason)
-	InvalidatePricingCache()
-	InitChannelCache()
-	return &current, nil
+	return updated, nil
 }
 
 func GetModelAvailabilityMap() (map[string]ModelAvailability, error) {
@@ -480,6 +572,10 @@ func ModelIsCustomerVisible(modelID string) bool {
 }
 
 func createModelAvailabilityAuditLog(db *gorm.DB, previous, next ModelAvailability, action, detail string) error {
+	return createModelAvailabilityAuditLogWithOperator(db, previous, next, action, detail, 0, "")
+}
+
+func createModelAvailabilityAuditLogWithOperator(db *gorm.DB, previous, next ModelAvailability, action, detail string, operatorID int, operatorName string) error {
 	return db.Create(&ModelAvailabilityAuditLog{
 		ModelID:         next.ModelID,
 		Action:          action,
@@ -489,13 +585,15 @@ func createModelAvailabilityAuditLog(db *gorm.DB, previous, next ModelAvailabili
 		NextStatus:      next.ConnectivityStatus,
 		Reason:          next.VisibilityReason,
 		Detail:          detail,
+		OperatorID:      operatorID,
+		OperatorName:    strings.TrimSpace(operatorName),
 		CreatedTime:     common.GetTimestamp(),
 	}).Error
 }
 
 func BootstrapModelAvailabilityFromAuditCSV(path string) (int, error) {
 	if strings.TrimSpace(path) == "" {
-		path = filepath.Join("D:"+string(os.PathSeparator), "sdkmax", "docs", "audit", "model-failure-reclassification-202608.csv")
+		path = defaultModelAvailabilityAuditCSVPath()
 	}
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -514,10 +612,10 @@ func BootstrapModelAvailabilityFromAuditCSV(path string) (int, error) {
 	}
 	header := map[string]int{}
 	for i, value := range records[0] {
-		header[strings.TrimSpace(strings.ToLower(value))] = i
+		header[normalizeCSVHeader(value)] = i
 	}
 	get := func(record []string, key string) string {
-		idx, ok := header[key]
+		idx, ok := header[normalizeCSVHeader(key)]
 		if !ok || idx >= len(record) {
 			return ""
 		}
@@ -531,36 +629,62 @@ func BootstrapModelAvailabilityFromAuditCSV(path string) (int, error) {
 			modelID = get(record, "model_id")
 		}
 		classification := strings.ToUpper(get(record, "classification"))
+		if classification == "" {
+			classification = strings.ToUpper(get(record, "primary_failure_reason"))
+		}
 		if modelID == "" || classification == "" {
 			continue
 		}
 		var existing ModelAvailability
 		err := DB.Where("model_id = ?", modelID).First(&existing).Error
-		if err == nil {
-			continue
-		}
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return changed, fmt.Errorf("bootstrap %s: %w", modelID, err)
 		}
-		row := ModelAvailability{
-			ModelID:             modelID,
-			Source:              ModelAvailabilitySourceAudit,
-			AdminEnabled:        true,
-			ConnectivityStatus:  connectivityFromAuditClassification(classification),
-			SDKMAXSupportStatus: supportFromAuditClassification(classification),
-			APIMode:             apiModeFromAuditClassification(classification),
-			Capabilities:        capabilitiesFromAuditClassification(classification),
-			CustomerVisible:     false,
-			VisibilityReason:    visibilityFromAuditClassification(classification),
-			ConsecutiveFailures: 3,
-			LastTestedAt:        now,
-			LastFailureAt:       now,
-			LastFailureReason:   classification,
-			LastError:           get(record, "error"),
-			CreatedTime:         now,
-			UpdatedTime:         now,
+		if err == nil && existing.Source == ModelAvailabilitySourceAudit && existing.LastSuccessAt > existing.LastFailureAt {
+			continue
 		}
-		if err := DB.Create(&row).Error; err != nil {
+		adminEnabled := true
+		createdTime := now
+		if err == nil {
+			adminEnabled = existing.AdminEnabled
+			createdTime = existing.CreatedTime
+			if createdTime == 0 {
+				createdTime = now
+			}
+		}
+		apiMode := apiModeFromAuditRecord(classification, get(record, "api_mode"), get(record, "is_batch"))
+		support := supportFromAuditRecord(classification, apiMode)
+		capabilities := strings.TrimSpace(get(record, "capabilities"))
+		if capabilities == "" {
+			capabilities = capabilitiesFromAuditClassification(classification)
+		}
+		failures, realFailures := auditFailureCounters(classification)
+		row := ModelAvailability{
+			ModelID:                 modelID,
+			Source:                  ModelAvailabilitySourceAudit,
+			AdminEnabled:            adminEnabled,
+			ConnectivityStatus:      connectivityFromAuditClassification(classification),
+			SDKMAXSupportStatus:     support,
+			APIMode:                 apiMode,
+			Capabilities:            capabilities,
+			VisibilityReason:        visibilityFromAuditClassification(classification),
+			ConsecutiveFailures:     failures,
+			ConsecutiveRealFailures: realFailures,
+			LastTestedAt:            now,
+			LastFailureAt:           now,
+			LastFailureReason:       classification,
+			LastError:               firstNonEmpty(get(record, "error"), get(record, "original_error")),
+			LastHTTPStatus:          common.String2Int(get(record, "http_status")),
+			CreatedTime:             createdTime,
+			UpdatedTime:             now,
+		}
+		row.CustomerVisible, row.VisibilityReason = ResolveModelVisibility(row)
+		if err == nil {
+			row.Id = existing.Id
+			if err := DB.Save(&row).Error; err != nil {
+				return changed, fmt.Errorf("bootstrap %s: %w", modelID, err)
+			}
+		} else if err := DB.Create(&row).Error; err != nil {
 			return changed, fmt.Errorf("bootstrap %s: %w", modelID, err)
 		}
 		changed++
@@ -570,6 +694,161 @@ func BootstrapModelAvailabilityFromAuditCSV(path string) (int, error) {
 		InitChannelCache()
 	}
 	return changed, nil
+}
+
+func BackfillModelAvailabilityFromEnabledAbilities() (int, error) {
+	var modelIDs []string
+	if err := DB.Model(&Ability{}).Where("enabled = ?", true).Distinct("model").Pluck("model", &modelIDs).Error; err != nil {
+		return 0, err
+	}
+	now := common.GetTimestamp()
+	created := 0
+	for _, modelID := range modelIDs {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			continue
+		}
+		var existing ModelAvailability
+		err := DB.Select("id").Where("model_id = ?", modelID).First(&existing).Error
+		if err == nil {
+			continue
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return created, err
+		}
+		apiMode := apiModeFromModelID(modelID)
+		row := ModelAvailability{
+			ModelID:              modelID,
+			Source:               ModelAvailabilitySourceBackfill,
+			AdminEnabled:         true,
+			ConnectivityStatus:   ConnectivityConnected,
+			SDKMAXSupportStatus:  supportStatusForAPIMode(apiMode),
+			APIMode:              apiMode,
+			Capabilities:         capabilityForAPIMode(apiMode),
+			ConsecutiveSuccesses: 2,
+			LastTestedAt:         now,
+			LastSuccessAt:        now,
+			CreatedTime:          now,
+			UpdatedTime:          now,
+		}
+		row.CustomerVisible, row.VisibilityReason = ResolveModelVisibility(row)
+		if err := DB.Create(&row).Error; err != nil {
+			return created, err
+		}
+		created++
+	}
+	if created > 0 {
+		InvalidatePricingCache()
+		InitChannelCache()
+	}
+	return created, nil
+}
+
+func defaultModelAvailabilityAuditCSVPath() string {
+	if path := strings.TrimSpace(os.Getenv("MODEL_AVAILABILITY_AUDIT_CSV_PATH")); path != "" {
+		return path
+	}
+	candidates := []string{
+		filepath.Join("D:"+string(os.PathSeparator), "sdkmax", "docs", "AUDIT", "model-failure-reclassification-202608.csv"),
+		filepath.Join("D:"+string(os.PathSeparator), "sdkmax", "docs", "audit", "model-failure-reclassification-202608.csv"),
+		filepath.Join("docs", "AUDIT", "model-failure-reclassification-202608.csv"),
+		filepath.Join("docs", "audit", "model-failure-reclassification-202608.csv"),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return candidates[0]
+}
+
+func normalizeCSVHeader(value string) string {
+	value = strings.TrimPrefix(value, "\ufeff")
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func apiModeFromAuditRecord(classification, rawMode, rawBatch string) string {
+	rawMode = strings.TrimSpace(strings.ToLower(rawMode))
+	if rawMode != "" {
+		switch rawMode {
+		case APIModeRealtime, APIModeBatch, APIModeAsync, APIModeImage, APIModeVideo, APIModeAudio, APIModeEmbedding, APIModeSearch:
+			return rawMode
+		default:
+			if strings.Contains(rawMode, "batch") {
+				return APIModeBatch
+			}
+			if strings.Contains(rawMode, "image") {
+				return APIModeImage
+			}
+			if strings.Contains(rawMode, "video") {
+				return APIModeVideo
+			}
+			if strings.Contains(rawMode, "audio") || strings.Contains(rawMode, "special") {
+				return APIModeAudio
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(rawBatch), "true") {
+		return APIModeBatch
+	}
+	return apiModeFromAuditClassification(classification)
+}
+
+func supportFromAuditRecord(classification, apiMode string) string {
+	if apiMode != APIModeRealtime && apiMode != APIModeEmbedding {
+		if apiMode == APIModeBatch {
+			return SupportUnsupported
+		}
+		return SupportUnverified
+	}
+	return supportFromAuditClassification(classification)
+}
+
+func auditFailureCounters(classification string) (int, int) {
+	switch classification {
+	case "NO_PROVIDER", "RATE_LIMITED", "WRONG_ENDPOINT", "WRONG_PAYLOAD", "BATCH_API_REQUIRED", "UNSUPPORTED_BY_SDKMAX":
+		return 1, 0
+	default:
+		return 3, 3
+	}
+}
+
+func apiModeFromModelID(modelID string) string {
+	lowerID := strings.ToLower(strings.TrimSpace(modelID))
+	if strings.Contains(lowerID, ":batch") || strings.HasSuffix(lowerID, "-batch") {
+		return APIModeBatch
+	}
+	if common.IsImageGenerationModel(modelID) {
+		return APIModeImage
+	}
+	return APIModeRealtime
+}
+
+func capabilityForAPIMode(apiMode string) string {
+	switch apiMode {
+	case APIModeImage:
+		return "image_generation"
+	case APIModeVideo:
+		return "video_generation"
+	case APIModeAudio:
+		return "audio"
+	case APIModeEmbedding:
+		return "embedding"
+	case APIModeSearch:
+		return "search"
+	default:
+		return "text"
+	}
 }
 
 func connectivityFromAuditClassification(classification string) string {

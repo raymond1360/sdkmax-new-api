@@ -45,9 +45,8 @@ func StartModelHealthCheckTask() {
 	modelHealthTaskOnce.Do(func() {
 		go func() {
 			for {
-				interval := modelHealthOptionInt("ModelHealthCheckIntervalMinutes", modelHealthDefaultIntervalMinutes)
-				time.Sleep(time.Duration(interval) * time.Minute)
 				if !modelHealthOptionBool("MODEL_HEALTH_CHECK_ENABLED", "ModelHealthCheckEnabled", false) {
+					time.Sleep(time.Minute)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(modelHealthOptionInt("ModelHealthCheckTimeoutSeconds", 45))*time.Second)
@@ -55,6 +54,8 @@ func StartModelHealthCheckTask() {
 					common.SysLog("model health check sweep failed: " + err.Error())
 				}
 				cancel()
+				interval := modelHealthOptionInt("ModelHealthCheckIntervalMinutes", modelHealthDefaultIntervalMinutes)
+				time.Sleep(time.Duration(interval) * time.Minute)
 			}
 		}()
 	})

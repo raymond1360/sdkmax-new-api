@@ -299,6 +299,11 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if count, err := BackfillModelAvailabilityFromEnabledAbilities(); err == nil && count > 0 {
+		common.SysLog(fmt.Sprintf("model availability backfill created %d rows from enabled abilities", count))
+	} else if err != nil {
+		common.SysLog("model availability backfill skipped: " + err.Error())
+	}
 	if count, err := BootstrapModelAvailabilityFromAuditCSV(""); err == nil && count > 0 {
 		common.SysLog(fmt.Sprintf("model availability bootstrap created %d rows from audit csv", count))
 	} else if err != nil {
