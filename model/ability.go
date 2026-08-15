@@ -35,6 +35,23 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 		Joins("left join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
 		Scan(&abilities).Error
+	if err != nil {
+		return abilities, err
+	}
+	if ModelAvailabilityTableExists() {
+		availabilityMap, mapErr := GetModelAvailabilityMap()
+		if mapErr != nil {
+			return abilities, mapErr
+		}
+		filtered := make([]AbilityWithChannel, 0, len(abilities))
+		for _, ability := range abilities {
+			if availability, ok := availabilityMap[ability.Model]; ok && !availability.CustomerVisible {
+				continue
+			}
+			filtered = append(filtered, ability)
+		}
+		abilities = filtered
+	}
 	return abilities, err
 }
 
@@ -89,6 +106,9 @@ func getPriority(group string, model string, retry int) (int, error) {
 }
 
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
+	if ModelAvailabilityTableExists() && !ModelIsCustomerVisible(model) {
+		return DB.Where("1 = 0"), nil
+	}
 	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
 	if retry != 0 {

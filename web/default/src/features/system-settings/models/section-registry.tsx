@@ -24,6 +24,7 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
+import { ModelAvailabilityCard } from './model-availability-card'
 import { OpenRouterSyncCard } from './openrouter-sync-card'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -125,6 +126,11 @@ const MODELS_SECTIONS = [
     id: 'openrouter-sync',
     titleKey: 'OpenRouter Sync',
     build: () => <OpenRouterSyncCard />,
+  },
+  {
+    id: 'model-health',
+    titleKey: 'Model Health',
+    build: () => <ModelAvailabilityCard />,
   },
   {
     id: 'channel-affinity',

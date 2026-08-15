@@ -152,6 +152,13 @@ func InitOptionMap() {
 	common.OptionMap["OpenRouterUnifiedChannelId"] = "0"
 	common.OptionMap["OpenRouterAutoSyncEnabled"] = "false"
 	common.OptionMap["OpenRouterAutoSyncIntervalMinutes"] = "360"
+	common.OptionMap["ModelHealthCheckEnabled"] = "false"
+	common.OptionMap["ModelAutoVisibilityEnabled"] = "true"
+	common.OptionMap["MODEL_HEALTH_CHECK_ENABLED"] = "false"
+	common.OptionMap["MODEL_AUTO_VISIBILITY_ENABLED"] = "true"
+	common.OptionMap["ModelHealthCheckIntervalMinutes"] = "360"
+	common.OptionMap["ModelHealthCheckConcurrency"] = "3"
+	common.OptionMap["ModelHealthCheckTimeoutSeconds"] = "45"
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2

@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useParams } from '@tanstack/react-router'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { SectionPageLayout } from '@/components/layout'
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import type { SystemOption } from '../types'
@@ -40,6 +42,7 @@ type SettingsPageProps<
   getSectionMeta: (sectionId: TSectionId) => {
     titleKey: string
   }
+  getSectionNavItems?: (t: TFunction) => Array<{ title: string; url: string }>
   extraArgs?: TExtraArgs
   loadingMessage?: string
   resolveSettings?: (
@@ -50,6 +53,7 @@ type SettingsPageProps<
 
 type SettingsPageFrameProps = {
   title: ReactNode
+  navItems?: Array<{ title: string; url: string; active: boolean }>
   children: ReactNode
 }
 
@@ -81,6 +85,22 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
           />
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
+          {props.navItems?.length ? (
+            <nav className='border-border -mt-2 flex max-w-full gap-1 overflow-x-auto border-b pb-2'>
+              {props.navItems.map((item) => (
+                <a
+                  key={item.url}
+                  href={item.url}
+                  className={cn(
+                    'hover:bg-muted text-muted-foreground inline-flex h-8 shrink-0 items-center rounded-md px-2.5 text-sm font-medium',
+                    item.active && 'bg-muted text-foreground'
+                  )}
+                >
+                  {item.title}
+                </a>
+              ))}
+            </nav>
+          ) : null}
           <div className='flex w-full flex-col gap-4'>{props.children}</div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
@@ -102,6 +122,7 @@ export function SettingsPage<
   defaultSection,
   getSectionContent,
   getSectionMeta,
+  getSectionNavItems,
   extraArgs,
   loadingMessage = 'Loading settings...',
   resolveSettings,
@@ -112,6 +133,14 @@ export function SettingsPage<
   const params = useParams({ from: routePath as any })
   const activeSection = (params?.section ?? defaultSection) as TSectionId
   const sectionMeta = getSectionMeta(activeSection)
+  const sectionNavItems = useMemo(
+    () =>
+      getSectionNavItems?.(t).map((item) => ({
+        ...item,
+        active: item.url.endsWith(`/${activeSection}`),
+      })),
+    [activeSection, getSectionNavItems, t]
+  )
 
   const settings = useMemo(() => {
     const baseSettings = getOptionValue(
@@ -125,7 +154,10 @@ export function SettingsPage<
 
   if (isLoading) {
     return (
-      <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+      <SettingsPageFrame
+        title={t(sectionMeta.titleKey)}
+        navItems={sectionNavItems}
+      >
         <div className='text-muted-foreground flex min-h-40 items-center justify-center text-sm'>
           {t(loadingMessage)}
         </div>
@@ -140,7 +172,10 @@ export function SettingsPage<
   )
 
   return (
-    <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+    <SettingsPageFrame
+      title={t(sectionMeta.titleKey)}
+      navItems={sectionNavItems}
+    >
       {sectionContent}
     </SettingsPageFrame>
   )

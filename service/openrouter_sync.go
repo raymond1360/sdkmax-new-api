@@ -45,6 +45,7 @@ type openRouterAPIModel struct {
 	ContextLength int64                  `json:"context_length"`
 	Pricing       openRouterModelPricing `json:"pricing"`
 	TopProvider   openRouterTopProvider  `json:"top_provider"`
+	Architecture  openRouterArchitecture `json:"architecture"`
 }
 
 type openRouterModelPricing struct {
@@ -54,6 +55,11 @@ type openRouterModelPricing struct {
 
 type openRouterTopProvider struct {
 	ContextLength int64 `json:"context_length"`
+}
+
+type openRouterArchitecture struct {
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
 }
 
 func FetchOpenRouterModels(ctx context.Context) ([]openRouterAPIModel, error) {
@@ -108,6 +114,66 @@ func providerFromOpenRouterModelID(modelID string) string {
 		return "DeepSeek"
 	}
 	return provider
+}
+
+func deriveOpenRouterAvailability(upstream openRouterAPIModel, seenAt int64) model.ModelAvailabilityUpstream {
+	modelID := strings.TrimSpace(upstream.ID)
+	capabilities := []string{}
+	for _, modality := range upstream.Architecture.InputModalities {
+		modality = strings.ToLower(strings.TrimSpace(modality))
+		switch modality {
+		case "text":
+			capabilities = append(capabilities, "text")
+		case "image":
+			capabilities = append(capabilities, "vision")
+		case "audio":
+			capabilities = append(capabilities, "audio")
+		}
+	}
+	for _, modality := range upstream.Architecture.OutputModalities {
+		modality = strings.ToLower(strings.TrimSpace(modality))
+		switch modality {
+		case "text":
+			capabilities = append(capabilities, "text")
+		case "image":
+			capabilities = append(capabilities, "image_generation")
+		case "video":
+			capabilities = append(capabilities, "video_generation")
+		case "audio":
+			capabilities = append(capabilities, "audio")
+		}
+	}
+	if len(capabilities) == 0 {
+		capabilities = append(capabilities, "text")
+	}
+	apiMode := model.APIModeRealtime
+	lowerID := strings.ToLower(modelID)
+	if strings.Contains(lowerID, ":batch") || strings.HasSuffix(lowerID, "-batch") {
+		apiMode = model.APIModeBatch
+	} else if containsStringFold(upstream.Architecture.OutputModalities, "video") {
+		apiMode = model.APIModeVideo
+	} else if containsStringFold(upstream.Architecture.OutputModalities, "image") {
+		apiMode = model.APIModeImage
+	} else if containsStringFold(upstream.Architecture.OutputModalities, "audio") {
+		apiMode = model.APIModeAudio
+	}
+	return model.ModelAvailabilityUpstream{
+		ModelID:      modelID,
+		Source:       model.ModelAvailabilitySourceOpenRouter,
+		APIMode:      apiMode,
+		Capabilities: capabilities,
+		SeenAt:       seenAt,
+	}
+}
+
+func containsStringFold(values []string, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueOpenRouterModelIDs(ids ...[]string) []string {
@@ -419,6 +485,9 @@ func SyncOpenRouterModels(ctx context.Context) (*OpenRouterSyncResult, error) {
 				}
 				result.ModelsUpdated++
 			}
+			if err := model.UpsertModelAvailabilityFromUpstream(tx, deriveOpenRouterAvailability(upstream, now)); err != nil {
+				return err
+			}
 		}
 
 		if len(seen) > 0 {
@@ -434,6 +503,15 @@ func SyncOpenRouterModels(ctx context.Context) (*OpenRouterSyncResult, error) {
 				return disabled.Error
 			}
 			result.ModelsDisabled = int(disabled.RowsAffected)
+			missingModelIDs := make([]string, 0)
+			for _, existingID := range existingOpenRouterModelIDs {
+				if _, ok := seen[existingID]; !ok {
+					missingModelIDs = append(missingModelIDs, existingID)
+				}
+			}
+			if err := model.MarkAvailabilityUpstreamMissing(tx, missingModelIDs, now); err != nil {
+				return err
+			}
 		}
 
 		sort.Strings(modelIDs)
