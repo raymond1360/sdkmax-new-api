@@ -25,7 +25,6 @@ export type SdkmaxModelCollectionId =
   | 'enterprise'
   | 'value'
   | 'chinese'
-  | 'developer'
 
 export type SdkmaxModelCollection = {
   id: SdkmaxModelCollectionId
@@ -102,14 +101,6 @@ export const SDKMAX_MODEL_COLLECTIONS: SdkmaxModelCollection[] = [
       'Chinese writing, translation, customer service, and knowledge work.',
     patterns: [/qwen/i, /deepseek/i, /glm/i, /kimi/i, /moonshot/i, /hunyuan/i],
     tags: ['chinese', 'translation', 'local'],
-  },
-  {
-    id: 'developer',
-    title: 'Developer mode',
-    description: 'Flexible model access for engineers who want manual control.',
-    intent: 'Choose exactly which models a key can call.',
-    patterns: [/./],
-    tags: ['advanced', 'manual', 'api'],
   },
 ]
 
@@ -252,7 +243,6 @@ export function getModelCollections(modelName: string) {
   return SDKMAX_MODEL_COLLECTIONS.filter(
     (collection) =>
       collection.id !== 'recommended' &&
-      collection.id !== 'developer' &&
       modelMatchesCollection(modelName, collection)
   )
 }

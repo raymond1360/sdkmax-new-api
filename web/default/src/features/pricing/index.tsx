@@ -41,8 +41,9 @@ import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
 import { usePricingData } from './hooks/use-pricing-data'
 import { getSdkmaxTokenPriceSnapshot } from './lib/price'
+import type { PricingModel } from './types'
 
-function hasSdkmaxLowerPrice(model: { model_name: string }) {
+function hasSdkmaxLowerPrice(model: PricingModel) {
   const officialPrice = getOfficialModelPrice(model.model_name)
   const sdkmaxPrice = getSdkmaxTokenPriceSnapshot(model)
   if (!officialPrice || !sdkmaxPrice) return false
@@ -145,8 +146,7 @@ export function Pricing() {
     }
 
     return [...result].sort(
-      (a, b) =>
-        Number(hasSdkmaxLowerPrice(b)) - Number(hasSdkmaxLowerPrice(a))
+      (a, b) => Number(hasSdkmaxLowerPrice(b)) - Number(hasSdkmaxLowerPrice(a))
     )
   }, [filteredModels, selectedCollection])
 
@@ -293,9 +293,7 @@ export function Pricing() {
               </button>
             </div>
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4'>
-              {SDKMAX_MODEL_COLLECTIONS.filter(
-                (collection) => collection.id !== 'developer'
-              ).map((collection) => {
+              {SDKMAX_MODEL_COLLECTIONS.map((collection) => {
                 const active = selectedCollection === collection.id
                 return (
                   <button
