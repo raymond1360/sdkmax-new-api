@@ -254,16 +254,13 @@ export function getOfficialModelPrice(modelName: string) {
 
 export function getCollectionModelNames<T extends { model_name?: string }>(
   models: Array<T | string>,
-  collectionId: SdkmaxModelCollectionId,
-  limit = 12
+  collectionId: SdkmaxModelCollectionId
 ) {
   const collection = getCollectionById(collectionId)
   if (!collection) return []
-  if (collection.allModels) return []
   return models
     .map((model) => (typeof model === 'string' ? model : model.model_name))
     .filter((modelName): modelName is string =>
       modelName ? modelMatchesCollection(modelName, collection) : false
     )
-    .slice(0, limit)
 }

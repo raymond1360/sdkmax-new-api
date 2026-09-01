@@ -329,6 +329,9 @@ export function ApiKeysTable() {
         'No API keys available. Create your first API key to get started.'
       )}
       skeletonKeyPrefix='api-keys-skeleton'
+      className='w-full min-w-0'
+      tableClassName='w-full max-w-full min-w-0'
+      tableElementClassName='min-w-[1280px]'
       toolbarProps={{
         searchPlaceholder: t('Filter by name...'),
         additionalSearch: (
