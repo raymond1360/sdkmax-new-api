@@ -139,6 +139,18 @@ export function formatTimestampToDate(
   return dayjs(ms).format('YYYY-MM-DD HH:mm:ss')
 }
 
+/** Format a unix timestamp to a compact YY/M/D HH:mm string (e.g. 26/9/1 19:15) */
+export function formatTimestampToShortDate(
+  timestamp?: number,
+  unit: 'seconds' | 'milliseconds' = 'seconds'
+): string {
+  if (!timestamp || timestamp === -1 || timestamp === 0) {
+    return '-'
+  }
+  const ms = unit === 'seconds' ? timestamp * 1000 : timestamp
+  return dayjs(ms).format('YY/M/D HH:mm')
+}
+
 /** Format a Date object to YYYY-MM-DD HH:mm:ss */
 export function formatDateTimeStr(date: Date): string {
   return dayjs(date).format('YYYY-MM-DD HH:mm:ss')

@@ -275,7 +275,7 @@ export function ApiKeysMutateDrawer({
 
   const applyScenarioPreset = (collectionId: SdkmaxModelCollectionId) => {
     setSelectedScenario(collectionId)
-    const selectedModels = getCollectionModelNames(models, collectionId, 16)
+    const selectedModels = getCollectionModelNames(models, collectionId)
     form.setValue('model_limits', selectedModels, { shouldDirty: true })
     if (!form.getValues('name')) {
       const collection = SDKMAX_MODEL_COLLECTIONS.find(
@@ -514,13 +514,11 @@ export function ApiKeysMutateDrawer({
                 />
                 <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
                   {SDKMAX_MODEL_COLLECTIONS.map((collection) => {
-                    const count = collection.allModels
-                      ? models.length
-                      : getCollectionModelNames(
-                          models,
-                          collection.id,
-                          99
-                        ).length
+                    const collectionModelNames = getCollectionModelNames(
+                      models,
+                      collection.id
+                    )
+                    const count = collectionModelNames.length
                     const active = selectedScenario === collection.id
                     return (
                       <button
