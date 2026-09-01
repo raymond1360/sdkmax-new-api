@@ -20,7 +20,11 @@ import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { getUserGroups } from '@/lib/api'
-import { formatQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatQuota,
+  formatTimestampToDate,
+  formatTimestampToShortDate,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -259,7 +263,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       ),
       cell: ({ row }) => (
         <span className='text-muted-foreground font-mono text-xs tabular-nums'>
-          {formatTimestampToDate(row.getValue('created_time'))}
+          {formatTimestampToShortDate(row.getValue('created_time'))}
         </span>
       ),
       meta: { label: t('Created'), mobileHidden: true },
@@ -276,7 +280,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         }
         return (
           <span className='text-muted-foreground font-mono text-xs tabular-nums'>
-            {formatTimestampToDate(accessedTime)}
+            {formatTimestampToShortDate(accessedTime)}
           </span>
         )
       },
