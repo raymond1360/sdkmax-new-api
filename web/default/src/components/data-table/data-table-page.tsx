@@ -188,6 +188,12 @@ export type DataTablePageProps<TData> = {
   tableClassName?: string
 
   /**
+   * Desktop `<Table>` className override.
+   * Useful when a feature needs a stable minimum table width for horizontal scrolling.
+   */
+  tableElementClassName?: string
+
+  /**
    * Desktop `<TableHeader>` className override.
    * Useful for sticky headers (`'sticky top-0 z-10 bg-muted/30'`) on long lists.
    */
@@ -308,7 +314,7 @@ function renderDesktop<TData>(
         props.tableClassName
       )}
     >
-      <Table>
+      <Table className={props.tableElementClassName}>
         <TableHeader className={props.tableHeaderClassName}>
           {props.table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
