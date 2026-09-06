@@ -8,6 +8,16 @@ name: Feature branch build & test verification (no deploy)
 # machine and without going anywhere near sdkmax-prod/release or the
 # production-tag-publishing docker-build.yml workflow.
 #
+# This workflow file itself lives on the default branch (sdkmax-dev) so
+# GitHub will let it be dispatched at all (workflow_dispatch requires the
+# workflow definition to already exist on the default branch). The branch it
+# actually builds is controlled by the `target_ref` input below, NOT by
+# "Use workflow from" — every job explicitly checks out `target_ref` and
+# then verifies the commit it actually got matches what target_ref resolved
+# to at dispatch time, failing immediately on any mismatch. This is what
+# lets you run this workflow against feature/google-primary-login (or any
+# other branch) without ever merging that branch's code into sdkmax-dev.
+#
 # Safety properties (see docs/deployment/CLAUDE_GOOGLE_LOGIN_PRE_PRODUCTION_CHECK.md):
 # - workflow_dispatch only: never runs on push/PR, cannot be triggered by
 #   merely pushing a feature branch.
@@ -19,29 +29,115 @@ name: Feature branch build & test verification (no deploy)
 #   the Dockerfile; OAuth credentials are runtime admin-configured data, not
 #   build inputs.
 # - Does not modify, read, or depend on any other workflow file.
+# - Build order matches the real Dockerfile: both frontend themes are built
+#   BEFORE any Go build, because main.go embeds both web/default/dist and
+#   web/classic/dist at compile time (`//go:embed`) and fails outright if
+#   either directory is missing — dist directories are never committed to
+#   Git, only generated at build time.
+# - The secret scan's incremental (git-history) step only scans commits new
+#   relative to origin/sdkmax-dev, so it can never re-surface old, already
+#   reviewed history; the working-tree snapshot scan uses a small,
+#   fingerprint-precise .gitleaksignore for a handful of manually verified
+#   pre-existing false positives (documented in the same file) — it does not
+#   disable any rule and does not touch new findings.
 
 on:
   workflow_dispatch:
     inputs:
-      reason:
-        description: "Reason for this manual verification run"
-        required: false
+      target_ref:
+        description: "Branch, tag, or SHA to actually check out and build (e.g. feature/google-primary-login)"
+        required: true
         type: string
 
 concurrency:
-  group: feature-build-verify-${{ github.ref }}
+  group: feature-build-verify-${{ github.event.inputs.target_ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  resolve-ref:
+    name: Resolve and verify target_ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve target_ref to a commit SHA via the GitHub API
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TARGET_REF" ]; then
+            echo "::error::target_ref input is required and was empty"
+            exit 1
+          fi
+          SHA=$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "refs/heads/$TARGET_REF" | cut -f1)
+          if [ -z "$SHA" ]; then
+            echo "::error::Could not resolve target_ref '$TARGET_REF' to a branch on ${{ github.repository }}"
+            exit 1
+          fi
+          echo "Requested target_ref: $TARGET_REF"
+          echo "Resolved HEAD SHA:    $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Feature branch verification"
+            echo ""
+            echo "- Requested \`target_ref\`: \`$TARGET_REF\`"
+            echo "- Resolved HEAD SHA: \`$SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   backend:
     name: Backend build, vet, test
+    needs: [resolve-ref]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+
+      - name: Verify checked-out commit matches resolved target_ref
+        env:
+          EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          ACTUAL=$(git rev-parse HEAD)
+          echo "target_ref:        ${{ inputs.target_ref }}"
+          echo "actual HEAD SHA:   $ACTUAL"
+          echo "expected HEAD SHA: $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build — this would otherwise silently build the wrong ref."
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Write placeholder VERSION file
+        run: echo "verify-$(git rev-parse --short=12 HEAD)" > VERSION
+
+      # Steps below mirror the Dockerfile's real build order: both frontend
+      # themes must be built before `go build`, because main.go embeds both
+      # web/default/dist and web/classic/dist at compile time.
+      - name: Install web/default dependencies
+        working-directory: web/default
+        run: bun install
+
+      - name: Build web/default (main.go embeds web/default/dist)
+        working-directory: web/default
+        run: DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
+
+      - name: Install web/classic dependencies
+        working-directory: web/classic
+        run: bun install
+
+      - name: Build web/classic (main.go embeds web/classic/dist)
+        working-directory: web/classic
+        run: VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
 
       - uses: actions/setup-go@v5
         with:
@@ -78,10 +174,26 @@ jobs:
 
   frontend:
     name: Frontend typecheck & build
+    needs: [resolve-ref]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+
+      - name: Verify checked-out commit matches resolved target_ref
+        env:
+          EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          ACTUAL=$(git rev-parse HEAD)
+          echo "target_ref:        ${{ inputs.target_ref }}"
+          echo "actual HEAD SHA:   $ACTUAL"
+          echo "expected HEAD SHA: $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build."
+            exit 1
+          fi
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -101,12 +213,27 @@ jobs:
 
   secret-scan:
     name: Secret scan (gitleaks)
+    needs: [resolve-ref]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.target_ref }}
           fetch-depth: 0
+
+      - name: Verify checked-out commit matches resolved target_ref
+        env:
+          EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          ACTUAL=$(git rev-parse HEAD)
+          echo "target_ref:        ${{ inputs.target_ref }}"
+          echo "actual HEAD SHA:   $ACTUAL"
+          echo "expected HEAD SHA: $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to scan."
+            exit 1
+          fi
 
       - name: Install gitleaks (OSS binary, no license required)
         run: |
@@ -115,18 +242,46 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
 
       - name: Scan working tree
+        # Uses .gitleaksignore at the repo root: a small, fingerprint-exact
+        # allowlist of manually verified pre-existing false positives
+        # (unrelated to this or any feature branch). Any new finding is NOT
+        # covered by it and will fail this step.
         run: gitleaks dir . --no-banner
 
-      - name: Scan full commit history reachable from this branch
-        run: gitleaks git --no-banner .
+      - name: Scan commits new relative to origin/sdkmax-dev (incremental)
+        # Deliberately scoped to only the commits this branch adds on top of
+        # sdkmax-dev, not the entire repository history. This must always
+        # come back with zero findings on its own — no baseline or allowlist
+        # is used or needed here, because it never re-scans old, already
+        # reviewed commits in the first place.
+        run: |
+          git fetch --no-tags origin sdkmax-dev
+          BASE=$(git merge-base origin/sdkmax-dev HEAD)
+          echo "Incremental scan range: $BASE..HEAD"
+          gitleaks git --log-opts="$BASE..HEAD" --no-banner .
 
   docker-build:
     name: Docker image build (local only, not pushed)
+    needs: [resolve-ref, backend, frontend, secret-scan]
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+
+      - name: Verify checked-out commit matches resolved target_ref
+        env:
+          EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          ACTUAL=$(git rev-parse HEAD)
+          echo "target_ref:        ${{ inputs.target_ref }}"
+          echo "actual HEAD SHA:   $ACTUAL"
+          echo "expected HEAD SHA: $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build."
+            exit 1
+          fi
 
       - name: Write placeholder VERSION file
         run: echo "google-primary-login-$(git rev-parse --short=12 HEAD)" > VERSION
@@ -134,6 +289,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build image (no push)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -153,7 +309,9 @@ jobs:
         run: |
           echo "### Feature branch verification build" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Branch: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- target_ref: \`${{ inputs.target_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Built commit: \`${{ needs.resolve-ref.outputs.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Local tag: \`sdkmax-new-api:google-primary-login-verify\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image ID: \`${{ steps.build.outputs.imageid }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Pushed to a registry: **no** (this workflow never pushes anywhere)" >> "$GITHUB_STEP_SUMMARY"
