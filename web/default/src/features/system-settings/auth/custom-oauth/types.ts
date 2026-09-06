@@ -34,6 +34,7 @@ export interface CustomOAuthProvider {
   token_endpoint: string
   user_info_endpoint: string
   scopes: string
+  provider_type: string // '' = generic userinfo flow, 'google' = ID Token verification flow
   user_id_field: string
   username_field: string
   display_name_field: string
@@ -67,6 +68,7 @@ export const customOAuthFormSchema = z.object({
   token_endpoint: z.string().min(1, 'Token endpoint is required'),
   user_info_endpoint: z.string().min(1, 'User info endpoint is required'),
   scopes: z.string().optional().default(''),
+  provider_type: z.string().optional().default(''),
   user_id_field: z.string().min(1, 'User ID field is required'),
   username_field: z.string().optional().default(''),
   display_name_field: z.string().optional().default(''),
@@ -114,9 +116,27 @@ export interface OAuthPreset {
   display_name_field: string
   email_field: string
   needsBaseUrl: boolean
+  wellKnown?: string
+  providerType?: string
 }
 
 export const OAUTH_PRESETS: OAuthPreset[] = [
+  {
+    key: 'google',
+    name: 'Google',
+    icon: 'google',
+    authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_endpoint: 'https://oauth2.googleapis.com/token',
+    user_info_endpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
+    scopes: 'openid email profile',
+    user_id_field: 'sub',
+    username_field: '',
+    display_name_field: 'name',
+    email_field: 'email',
+    needsBaseUrl: false,
+    wellKnown: 'https://accounts.google.com/.well-known/openid-configuration',
+    providerType: 'google',
+  },
   {
     key: 'github-enterprise',
     name: 'GitHub Enterprise',

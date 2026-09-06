@@ -144,6 +144,7 @@ func GetStatus(c *gin.Context) {
 			ClientId              string `json:"client_id"`
 			AuthorizationEndpoint string `json:"authorization_endpoint"`
 			Scopes                string `json:"scopes"`
+			ProviderType          string `json:"provider_type"`
 		}
 		providersInfo := make([]CustomOAuthInfo, 0, len(customProviders))
 		for _, p := range customProviders {
@@ -156,6 +157,7 @@ func GetStatus(c *gin.Context) {
 				ClientId:              config.ClientId,
 				AuthorizationEndpoint: config.AuthorizationEndpoint,
 				Scopes:                config.Scopes,
+				ProviderType:          config.ProviderType,
 			})
 		}
 		data["custom_oauth_providers"] = providersInfo

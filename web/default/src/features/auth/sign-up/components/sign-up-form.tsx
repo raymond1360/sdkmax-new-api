@@ -47,6 +47,8 @@ import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/password-input'
 import { Turnstile } from '@/components/turnstile'
 import { register, wechatLoginByCode } from '@/features/auth/api'
+import { AuthDivider } from '@/features/auth/components/auth-divider'
+import { GoogleSignInButton } from '@/features/auth/components/google-sign-in-button'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { registerFormSchema } from '@/features/auth/constants'
@@ -109,6 +111,9 @@ export function SignUpForm({
     status?.oauth_register_enabled ??
     status?.data?.oauth_register_enabled ??
     true
+  const hasGoogleOAuth = Boolean(
+    status?.custom_oauth_providers?.some((p) => p.provider_type === 'google')
+  )
   const hasWeChatLogin = Boolean(status?.wechat_login)
   const turnstileReady = !isTurnstileEnabled || Boolean(turnstileToken)
 
@@ -236,6 +241,16 @@ export function SignUpForm({
         className={cn('grid gap-4', className)}
         {...props}
       >
+        {oauthRegisterEnabled && hasGoogleOAuth && (
+          <div className='space-y-3'>
+            <GoogleSignInButton
+              status={status}
+              disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+            />
+            <AuthDivider />
+          </div>
+        )}
+
         {/* Username Field */}
         <FormField
           control={form.control}

@@ -49,6 +49,7 @@ type CustomOAuthProvider struct {
 	TokenEndpoint         string `json:"token_endpoint" gorm:"type:varchar(512)"`                        // Token exchange URL
 	UserInfoEndpoint      string `json:"user_info_endpoint" gorm:"type:varchar(512)"`                    // User info URL
 	Scopes                string `json:"scopes" gorm:"type:varchar(256);default:'openid profile email'"` // OAuth scopes
+	ProviderType          string `json:"provider_type" gorm:"type:varchar(32);default:''"`               // '' = generic userinfo-endpoint flow, 'google' = ID Token verification flow
 
 	// Field mapping configuration (supports JSONPath via gjson)
 	UserIdField      string `json:"user_id_field" gorm:"type:varchar(128);default:'sub'"`                 // User ID field path, e.g., "sub", "id", "data.user.id"
@@ -175,6 +176,14 @@ func validateCustomOAuthProvider(provider *CustomOAuthProvider) error {
 		return errors.New("user info endpoint is required")
 	}
 
+	provider.ProviderType = strings.ToLower(strings.TrimSpace(provider.ProviderType))
+	switch provider.ProviderType {
+	case "", "google":
+		// supported
+	default:
+		return errors.New("provider_type must be empty or 'google'")
+	}
+
 	// Set defaults for field mappings if empty
 	if provider.UserIdField == "" {
 		provider.UserIdField = "sub"
@@ -191,6 +200,11 @@ func validateCustomOAuthProvider(provider *CustomOAuthProvider) error {
 	if provider.Scopes == "" {
 		provider.Scopes = "openid profile email"
 	}
+	if provider.ProviderType == "google" {
+		if err := validateGoogleScopes(provider.Scopes); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(provider.AccessPolicy) != "" {
 		var policy accessPolicyPayload
 		if err := common.UnmarshalJsonStr(provider.AccessPolicy, &policy); err != nil {
@@ -201,6 +215,27 @@ func validateCustomOAuthProvider(provider *CustomOAuthProvider) error {
 		}
 	}
 
+	return nil
+}
+
+// googleAllowedScopes restricts a Google-type provider to the minimal
+// identity scopes (openid, email, profile). This is a server-side guardrail
+// so an admin cannot accidentally request Gmail/Drive/Calendar or other
+// unrelated Google API access through this login integration.
+var googleAllowedScopes = map[string]struct{}{
+	"openid":  {},
+	"email":   {},
+	"profile": {},
+	"https://www.googleapis.com/auth/userinfo.email":   {},
+	"https://www.googleapis.com/auth/userinfo.profile": {},
+}
+
+func validateGoogleScopes(scopes string) error {
+	for _, scope := range strings.Fields(scopes) {
+		if _, ok := googleAllowedScopes[scope]; !ok {
+			return fmt.Errorf("scope %q is not allowed for Google sign-in; only openid/email/profile are permitted", scope)
+		}
+	}
 	return nil
 }
 

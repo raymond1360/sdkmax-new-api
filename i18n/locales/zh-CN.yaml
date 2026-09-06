@@ -248,6 +248,8 @@ oauth.connect_failed: "无法连接至 {{.Provider}} 服务器，请稍后重试
 oauth.token_failed: "{{.Provider}} 获取 Token 失败，请检查设置"
 oauth.user_info_empty: "{{.Provider}} 获取用户信息为空，请检查设置"
 oauth.trust_level_low: "Linux DO 信任等级未达到管理员设置的最低信任等级"
+oauth.email_not_verified: "您的 {{.Provider}} 邮箱尚未验证，请先在 {{.Provider}} 完成邮箱验证"
+oauth.email_conflict: "该邮箱已注册，请先使用原登录方式登录，然后在个人设置中绑定 Google 账号。"
 
 # Model layer error messages
 redeem.failed: "兑换失败，请稍后重试"
@@ -278,3 +280,4 @@ custom_oauth.name_empty: "提供商名称不能为空"
 custom_oauth.has_bindings: "无法删除已有用户绑定的提供商"
 custom_oauth.binding_not_found: "OAuth 绑定不存在"
 custom_oauth.provider_id_field_invalid: "无法从提供商响应中提取用户 ID"
+custom_oauth.unbind_sole_method: "无法解绑：这是您唯一的登录方式。请先设置密码或绑定其他登录方式后再解绑。"

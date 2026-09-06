@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,7 @@ type CustomOAuthProviderResponse struct {
 	TokenEndpoint         string `json:"token_endpoint"`
 	UserInfoEndpoint      string `json:"user_info_endpoint"`
 	Scopes                string `json:"scopes"`
+	ProviderType          string `json:"provider_type"`
 	UserIdField           string `json:"user_id_field"`
 	UsernameField         string `json:"username_field"`
 	DisplayNameField      string `json:"display_name_field"`
@@ -58,6 +60,7 @@ func toCustomOAuthProviderResponse(p *model.CustomOAuthProvider) *CustomOAuthPro
 		TokenEndpoint:         p.TokenEndpoint,
 		UserInfoEndpoint:      p.UserInfoEndpoint,
 		Scopes:                p.Scopes,
+		ProviderType:          p.ProviderType,
 		UserIdField:           p.UserIdField,
 		UsernameField:         p.UsernameField,
 		DisplayNameField:      p.DisplayNameField,
@@ -123,6 +126,7 @@ type CreateCustomOAuthProviderRequest struct {
 	TokenEndpoint         string `json:"token_endpoint" binding:"required"`
 	UserInfoEndpoint      string `json:"user_info_endpoint" binding:"required"`
 	Scopes                string `json:"scopes"`
+	ProviderType          string `json:"provider_type"`
 	UserIdField           string `json:"user_id_field"`
 	UsernameField         string `json:"username_field"`
 	DisplayNameField      string `json:"display_name_field"`
@@ -241,6 +245,7 @@ func CreateCustomOAuthProvider(c *gin.Context) {
 		TokenEndpoint:         req.TokenEndpoint,
 		UserInfoEndpoint:      req.UserInfoEndpoint,
 		Scopes:                req.Scopes,
+		ProviderType:          req.ProviderType,
 		UserIdField:           req.UserIdField,
 		UsernameField:         req.UsernameField,
 		DisplayNameField:      req.DisplayNameField,
@@ -278,6 +283,7 @@ type UpdateCustomOAuthProviderRequest struct {
 	TokenEndpoint         string  `json:"token_endpoint"`
 	UserInfoEndpoint      string  `json:"user_info_endpoint"`
 	Scopes                string  `json:"scopes"`
+	ProviderType          *string `json:"provider_type"` // Optional: if nil, keep existing
 	UserIdField           string  `json:"user_id_field"`
 	UsernameField         string  `json:"username_field"`
 	DisplayNameField      string  `json:"display_name_field"`
@@ -355,6 +361,9 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 	}
 	if req.Scopes != "" {
 		provider.Scopes = req.Scopes
+	}
+	if req.ProviderType != nil {
+		provider.ProviderType = *req.ProviderType
 	}
 	if req.UserIdField != "" {
 		provider.UserIdField = req.UserIdField
@@ -519,6 +528,38 @@ func GetUserOAuthBindingsByAdmin(c *gin.Context) {
 	})
 }
 
+// hasOtherLoginMethod reports whether userId would still be able to sign in
+// after removing the OAuth binding for excludeProviderId: a password, a
+// built-in OAuth identity (GitHub/Discord/OIDC/WeChat/Telegram/LinuxDO), or
+// another custom OAuth binding all count as an "other" method.
+func hasOtherLoginMethod(userId int, excludeProviderId int) (bool, error) {
+	// selectAll=true: GetUserById(id, false) omits the password column, which
+	// would make every user look passwordless and wrongly block unbinding.
+	// This value never leaves this function.
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		return false, err
+	}
+	if user.Password != "" {
+		return true, nil
+	}
+	if user.GitHubId != "" || user.DiscordId != "" || user.OidcId != "" ||
+		user.WeChatId != "" || user.TelegramId != "" || user.LinuxDOId != "" {
+		return true, nil
+	}
+
+	bindings, err := model.GetUserOAuthBindingsByUserId(userId)
+	if err != nil {
+		return false, err
+	}
+	for _, binding := range bindings {
+		if binding.ProviderId != excludeProviderId {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // UnbindCustomOAuth unbinds a custom OAuth provider from the current user
 func UnbindCustomOAuth(c *gin.Context) {
 	userId := c.GetInt("id")
@@ -531,6 +572,16 @@ func UnbindCustomOAuth(c *gin.Context) {
 	providerId, err := strconv.Atoi(providerIdStr)
 	if err != nil {
 		common.ApiErrorMsg(c, "无效的提供商 ID")
+		return
+	}
+
+	hasOther, err := hasOtherLoginMethod(userId, providerId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !hasOther {
+		common.ApiErrorI18n(c, i18n.MsgCustomOAuthUnbindSoleMethod)
 		return
 	}
 
@@ -569,6 +620,16 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 	providerId, err := strconv.Atoi(providerIdStr)
 	if err != nil {
 		common.ApiErrorMsg(c, "invalid provider id")
+		return
+	}
+
+	hasOther, err := hasOtherLoginMethod(userId, providerId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !hasOther {
+		common.ApiErrorI18n(c, i18n.MsgCustomOAuthUnbindSoleMethod)
 		return
 	}
 

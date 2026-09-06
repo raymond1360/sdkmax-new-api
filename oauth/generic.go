@@ -22,7 +22,31 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
+
+// sensitiveTokenResponseFields lists JSON fields in an OAuth token response
+// that must never appear in logs, even at DEBUG level.
+var sensitiveTokenResponseFields = []string{"access_token", "id_token", "refresh_token", "client_secret"}
+
+// redactTokenResponseForLog masks known-sensitive fields (access/id/refresh
+// tokens, client secret) in a raw token-endpoint JSON response before it is
+// written to debug logs. Non-JSON bodies are omitted entirely rather than
+// logged verbatim, since we cannot selectively redact them.
+func redactTokenResponseForLog(bodyStr string) string {
+	if !stdjson.Valid([]byte(bodyStr)) {
+		return "[non-JSON response body omitted]"
+	}
+	redacted := bodyStr
+	for _, field := range sensitiveTokenResponseFields {
+		if gjson.Get(redacted, field).Exists() {
+			if updated, err := sjson.Set(redacted, field, "[REDACTED]"); err == nil {
+				redacted = updated
+			}
+		}
+	}
+	return redacted
+}
 
 // AuthStyle defines how to send client credentials
 const (
@@ -92,7 +116,7 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: code=%s...", p.config.Slug, code[:min(len(code), 10)])
+	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: code received (len=%d)", p.config.Slug, len(code))
 
 	redirectUri := fmt.Sprintf("%s/oauth/%s", system_setting.ServerAddress, p.config.Slug)
 	values := url.Values{}
@@ -150,7 +174,8 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 	}
 
 	bodyStr := string(body)
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken response body: %s", p.config.Slug, bodyStr[:min(len(bodyStr), 500)])
+	redactedBodyStr := redactTokenResponseForLog(bodyStr)
+	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken response body: %s", p.config.Slug, redactedBodyStr[:min(len(redactedBodyStr), 500)])
 
 	// Try to parse as JSON first
 	var tokenResponse struct {

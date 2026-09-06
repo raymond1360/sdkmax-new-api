@@ -28,6 +28,8 @@ import {
   buildDiscordOAuthUrl,
   buildOIDCOAuthUrl,
   buildLinuxDOOAuthUrl,
+  buildCustomOAuthUrl,
+  getOAuthStateAndNonce,
 } from '../lib/oauth'
 import type { SystemStatus, CustomOAuthProviderInfo } from '../types'
 
@@ -45,6 +47,11 @@ export function useOAuthLogin(status: SystemStatus | null) {
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const { auth } = useAuthStore()
+
+  const googleProvider =
+    status?.custom_oauth_providers?.find(
+      (provider) => provider.provider_type === 'google'
+    ) ?? null
 
   useEffect(() => {
     setGithubButtonText(t('Continue with GitHub'))
@@ -221,15 +228,42 @@ export function useOAuthLogin(status: SystemStatus | null) {
     }
   }
 
+  const handleGoogleLogin = async (provider: CustomOAuthProviderInfo) => {
+    if (!provider.authorization_endpoint || !provider.client_id) return
+
+    setIsLoading(true)
+    try {
+      await resetSession()
+      const stateInfo = await getOAuthStateAndNonce()
+      if (!stateInfo?.state) {
+        toast.error(t('Failed to initialize OAuth'))
+        return
+      }
+
+      const url = buildCustomOAuthUrl(
+        provider,
+        stateInfo.state,
+        stateInfo.nonce
+      )
+      window.open(url, '_self')
+    } catch (_error) {
+      toast.error(t('Failed to start Google login'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   return {
     isLoading,
     githubButtonText,
     githubButtonDisabled,
+    googleProvider,
     handleGitHubLogin,
     handleDiscordLogin,
     handleOIDCLogin,
     handleLinuxDOLogin,
     handleTelegramLogin,
+    handleGoogleLogin,
     handleCustomOAuthLogin,
   }
 }

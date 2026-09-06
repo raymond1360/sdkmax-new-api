@@ -19,6 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from './api'
 
 // ============================================================================
+// Shared provider shape (subset needed for URL building/binding)
+// ============================================================================
+
+export interface OAuthCustomProviderLike {
+  slug: string
+  client_id: string
+  authorization_endpoint: string
+  scopes?: string
+  provider_type?: string
+}
+
+// ============================================================================
 // OAuth URL Builders
 // ============================================================================
 
@@ -69,6 +81,32 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
   return `https://connect.linux.do/oauth2/authorize?response_type=code&client_id=${clientId}&state=${state}`
 }
 
+/**
+ * Build the authorize URL for any custom OAuth provider (including Google,
+ * which is configured as a custom provider with provider_type: 'google').
+ * When nonce is provided it is included so ID-Token-verifying providers
+ * (Google) can bind the returned token to this request.
+ */
+export function buildCustomOAuthUrl(
+  provider: OAuthCustomProviderLike,
+  state: string,
+  nonce?: string
+): string {
+  const redirectUri = `${window.location.origin}/oauth/${provider.slug}`
+  const url = new URL(provider.authorization_endpoint)
+  url.searchParams.set('client_id', provider.client_id)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('state', state)
+  if (provider.scopes) {
+    url.searchParams.set('scope', provider.scopes)
+  }
+  if (nonce) {
+    url.searchParams.set('nonce', nonce)
+  }
+  return url.toString()
+}
+
 // ============================================================================
 // OAuth Helper Functions
 // ============================================================================
@@ -94,6 +132,55 @@ export async function getOAuthState(): Promise<string | null> {
     console.error('Failed to get OAuth state:', error)
     return null
   }
+}
+
+/**
+ * Get OAuth state token together with its nonce (only Google needs the
+ * nonce; other providers ignore it). Same aff-code behavior as
+ * getOAuthState().
+ */
+export async function getOAuthStateAndNonce(): Promise<{
+  state: string
+  nonce: string
+} | null> {
+  try {
+    let path = '/api/oauth/state'
+    const affCode = localStorage.getItem('aff')
+    if (affCode && affCode.length > 0) {
+      path += `?aff=${affCode}`
+    }
+    const res = await api.get(path)
+    if (res.data.success && res.data.data) {
+      return {
+        state: res.data.data as string,
+        nonce: (res.data.nonce as string) || '',
+      }
+    }
+    return null
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to get OAuth state:', error)
+    return null
+  }
+}
+
+/**
+ * Bind a custom OAuth provider (including Google) to the currently signed
+ * in user. Unlike the login flow, this must NOT reset the current session:
+ * binding relies on the backend seeing an authenticated session when the
+ * callback runs, so the OAuth dance happens in a new tab (matching how
+ * GitHub/Discord/OIDC/LinuxDO binding already works below).
+ */
+export async function handleCustomOAuthBind(
+  provider: OAuthCustomProviderLike
+): Promise<void> {
+  const isGoogle = provider.provider_type === 'google'
+  const stateInfo = isGoogle ? await getOAuthStateAndNonce() : null
+  const state = isGoogle ? stateInfo?.state : await getOAuthState()
+  if (!state) return
+
+  const url = buildCustomOAuthUrl(provider, state, stateInfo?.nonce)
+  window.open(url, '_blank')
 }
 
 /**
