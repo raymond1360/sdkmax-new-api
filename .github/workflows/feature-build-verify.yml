@@ -1,0 +1,159 @@
+name: Feature branch build & test verification (no deploy)
+
+# Manual-only verification for feature branches (e.g. Google primary login).
+# This workflow intentionally does NOT publish any image anywhere and does
+# NOT touch production: it exists purely to prove that a feature branch
+# compiles, passes its tests, and produces a working Docker image via the
+# existing multi-stage Dockerfile, without needing Docker on a developer's
+# machine and without going anywhere near sdkmax-prod/release or the
+# production-tag-publishing docker-build.yml workflow.
+#
+# Safety properties (see docs/deployment/CLAUDE_GOOGLE_LOGIN_PRE_PRODUCTION_CHECK.md):
+# - workflow_dispatch only: never runs on push/PR, cannot be triggered by
+#   merely pushing a feature branch.
+# - Docker image is built locally in the runner (push: false) and discarded
+#   when the job ends. Nothing is pushed to Docker Hub, GHCR, or any
+#   registry, so there is no way to overwrite `sdkmax-prod`, `latest`, or
+#   any other existing tag.
+# - No Google OAuth credentials are referenced anywhere in this file or in
+#   the Dockerfile; OAuth credentials are runtime admin-configured data, not
+#   build inputs.
+# - Does not modify, read, or depend on any other workflow file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for this manual verification run"
+        required: false
+        type: string
+
+concurrency:
+  group: feature-build-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend build, vet, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build $(go list ./... | grep -v '/backup/')
+
+      - name: gofmt check
+        run: |
+          FILES=$(gofmt -l $(git ls-files '*.go' | grep -v '^backup/'))
+          if [ -n "$FILES" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$FILES"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet $(go list ./... | grep -v '/backup/')
+
+      - name: go test (feature-relevant packages, blocking)
+        run: go test ./oauth/... ./controller/... ./model/... ./middleware/...
+
+      - name: go test (full suite, informational only)
+        # Not gating: the upstream test suite has pre-existing failures
+        # unrelated to this feature (confirmed via `git stash` against the
+        # sdkmax-dev baseline, see the test report). This step still runs
+        # and its output is visible in the log/summary — it is not skipped,
+        # only non-blocking, so failures are never hidden. Bounded by
+        # timeout-minutes so a hang doesn't burn CI time silently.
+        continue-on-error: true
+        timeout-minutes: 10
+        run: go test $(go list ./... | grep -v '/backup/')
+
+  frontend:
+    name: Frontend typecheck & build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: web/default
+        run: bun install
+
+      - name: Typecheck
+        working-directory: web/default
+        run: bun run typecheck
+
+      - name: Build
+        working-directory: web/default
+        run: bun run build
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (OSS binary, no license required)
+        run: |
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Scan working tree
+        run: gitleaks dir . --no-banner
+
+      - name: Scan full commit history reachable from this branch
+        run: gitleaks git --no-banner .
+
+  docker-build:
+    name: Docker image build (local only, not pushed)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write placeholder VERSION file
+        run: echo "google-primary-login-$(git rev-parse --short=12 HEAD)" > VERSION
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            sdkmax-new-api:google-primary-login-verify
+          cache-from: type=gha,scope=feature-verify-amd64
+          cache-to: type=gha,mode=max,scope=feature-verify-amd64
+
+      - name: Inspect built image (digest is local-only, image was not pushed)
+        run: docker image inspect sdkmax-new-api:google-primary-login-verify --format '{{.Id}}'
+
+      - name: Build summary
+        run: |
+          echo "### Feature branch verification build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Local tag: \`sdkmax-new-api:google-primary-login-verify\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pushed to a registry: **no** (this workflow never pushes anywhere)" >> "$GITHUB_STEP_SUMMARY"
