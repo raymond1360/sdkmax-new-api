@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -164,9 +163,15 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	targetURL = strings.TrimSpace(targetURL)
 
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		common.ApiErrorMsg(c, "Discovery URL 无效，仅支持 http/https")
+	// P2-02: this is a Root-only route, but it still lets an admin make the
+	// server issue an outbound request to an arbitrary URL. validateDiscoveryURL
+	// enforces https-only and blocks obviously-private hosts up front;
+	// newDiscoveryHTTPClient additionally re-validates every redirect hop
+	// and re-checks the actually-resolved IP immediately before connecting
+	// (closing the DNS-rebinding gap a pure pre-flight check would leave
+	// open). See controller/oauth_discovery_ssrf.go.
+	if _, err := validateDiscoveryURL(targetURL); err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 
@@ -180,7 +185,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	httpReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := newDiscoveryHTTPClient()
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		common.ApiErrorMsg(c, "获取 Discovery 配置失败: "+err.Error())
@@ -188,8 +193,10 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
+	limitedBody := io.LimitReader(resp.Body, discoveryMaxResponseBytes)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, _ := io.ReadAll(io.LimitReader(limitedBody, 512))
 		message := strings.TrimSpace(string(body))
 		if message == "" {
 			message = resp.Status
@@ -199,7 +206,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 
 	var discovery map[string]any
-	if err = common.DecodeJson(resp.Body, &discovery); err != nil {
+	if err = common.DecodeJson(limitedBody, &discovery); err != nil {
 		common.ApiErrorMsg(c, "解析 Discovery 配置失败: "+err.Error())
 		return
 	}
