@@ -228,9 +228,21 @@ jobs:
         # already-broken test (TestListModelsTokenLimitIncludesTieredBillingModel,
         # confirmed failing even in isolation on a clean sdkmax-dev baseline
         # with zero relation to this branch) must not block this workflow.
-        # Any failure whose trace references a file this branch actually
-        # changed under oauth/, controller/, model/, or middleware/ still
-        # fails the build.
+        #
+        # Matching is scoped to Go's own structured failure output (`--- FAIL:`
+        # lines, testify's `Error Trace:` lines, and indented `some_test.go:N:`
+        # lines) rather than the full raw test output. A real run showed why:
+        # this project's request logger (via GORM's query logger) prints
+        # timestamped debug/info lines during any test that touches the DB,
+        # and those lines can incidentally contain a changed file's path
+        # (e.g. "model/user.go:190 record not found" printed while a
+        # completely unrelated, PASSING test exercises that code) - a naive
+        # substring match against the full output would misidentify that as
+        # a failure caused by the changed file. GORM's logger always prefixes
+        # with a timestamp ("2026/09/07 09:26:49 ..."); Go/testify's own
+        # failure output never does, so filtering to the latter's format
+        # excludes that noise while still catching a real failure whose
+        # trace points at a file this branch actually changed.
         run: |
           BASE=$(git merge-base origin/sdkmax-dev HEAD)
           CHANGED=$(git diff --name-only "$BASE" HEAD -- 'oauth/*.go' 'controller/*.go' 'model/*.go' 'middleware/*.go' | grep -v '^backup/' || true)
@@ -248,10 +260,13 @@ jobs:
             echo "go test reported failures above, but this branch changed no files under oauth/, controller/, model/, or middleware/; not blocking."
             exit 0
           fi
+          FAILURE_CONTEXT=$(echo "$TEST_OUT" | grep -E '^--- FAIL:|Error Trace:|^[[:space:]]+[A-Za-z0-9_./-]+_test\.go:[0-9]+:' || true)
+          echo "Structured failure lines considered for diff-scoping (excludes application/GORM log noise):"
+          echo "${FAILURE_CONTEXT:-<none>}"
           NEW_FINDINGS=""
           while IFS= read -r f; do
             [ -z "$f" ] && continue
-            MATCH=$(echo "$TEST_OUT" | grep -F "$f" || true)
+            MATCH=$(echo "$FAILURE_CONTEXT" | grep -F "$f" || true)
             if [ -n "$MATCH" ]; then
               NEW_FINDINGS="${NEW_FINDINGS}${MATCH}"$'\n'
             fi
