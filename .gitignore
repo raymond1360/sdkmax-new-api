@@ -32,7 +32,7 @@ plans
 
 electron/node_modules
 electron/dist
-data/
+/data/
 backup/
 backups/
 .gomodcache/
