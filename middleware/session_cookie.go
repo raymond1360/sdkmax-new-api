@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
@@ -45,12 +47,79 @@ func DynamicSessionCookieOptions() gin.HandlerFunc {
 	}
 }
 
-// isRequestHTTPS detects the real scheme of the client-facing request,
-// honoring X-Forwarded-Proto set by a reverse proxy terminating TLS.
+// trustedProtoProxyCIDRs lists the CIDR ranges whose immediate TCP peer
+// address is trusted to set X-Forwarded-Proto. That address comes from
+// http.Request.RemoteAddr, which Go's own listener records from the raw TCP
+// connection before any application or proxy code runs - unlike header
+// values, it cannot be set by a client. Defaults to loopback only: SDKMAX's
+// documented production topology (docs/deployment) runs Nginx on the same
+// host, reverse-proxying to 127.0.0.1, with Nginx terminating TLS. Override
+// via the TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs or bare IPs)
+// only if the reverse proxy reaches this process over a different, still
+// non-public, network path (e.g. a private container network).
+var trustedProtoProxyCIDRs = parseTrustedProxyCIDRs(common.GetEnvOrDefaultString("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"))
+
+func parseTrustedProxyCIDRs(raw string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, ipNet, err := net.ParseCIDR(part); err == nil {
+			nets = append(nets, ipNet)
+			continue
+		}
+		if ip := net.ParseIP(part); ip != nil {
+			nets = append(nets, singleIPNet(ip))
+		}
+	}
+	return nets
+}
+
+func singleIPNet(ip net.IP) *net.IPNet {
+	if v4 := ip.To4(); v4 != nil {
+		return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}
+	}
+	return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+}
+
+// isTrustedProxyPeer reports whether remoteAddr (http.Request.RemoteAddr)
+// falls within trustedProtoProxyCIDRs.
+func isTrustedProxyPeer(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, ipNet := range trustedProtoProxyCIDRs {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRequestHTTPS detects the real scheme of the client-facing request. It
+// only honors X-Forwarded-Proto when the immediate TCP peer is a trusted
+// reverse proxy (see isTrustedProxyPeer). X-Forwarded-Proto is an ordinary
+// HTTP header any client can set; trusting it unconditionally would let a
+// request reaching this process directly (bypassing Nginx, e.g. if the
+// deployment's firewall does not actually block the app's port - see
+// docs/deployment) claim to be HTTPS and receive a Secure session cookie
+// over a connection that was never encrypted. When the peer is not
+// trusted, this falls back to r.TLS != nil, true only if this process
+// terminated TLS itself, which it does not in the documented production
+// deployment (Nginx does).
 func isRequestHTTPS(r *http.Request) bool {
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		first := strings.TrimSpace(strings.Split(proto, ",")[0])
-		return strings.EqualFold(first, "https")
+	if isTrustedProxyPeer(r.RemoteAddr) {
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			first := strings.TrimSpace(strings.Split(proto, ",")[0])
+			return strings.EqualFold(first, "https")
+		}
 	}
 	if r.TLS != nil {
 		return true
