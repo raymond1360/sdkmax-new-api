@@ -105,13 +105,16 @@ jobs:
     needs: [resolve-ref]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      actual_sha: ${{ steps.verify.outputs.actual_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 0
 
       - name: Verify checked-out commit matches resolved target_ref
+        id: verify
         env:
           EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
         run: |
@@ -119,6 +122,7 @@ jobs:
           echo "target_ref:        ${{ inputs.target_ref }}"
           echo "actual HEAD SHA:   $ACTUAL"
           echo "expected HEAD SHA: $EXPECTED"
+          echo "actual_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build — this would otherwise silently build the wrong ref."
             exit 1
@@ -127,7 +131,7 @@ jobs:
       - name: Fetch sdkmax-dev for diff-scoped lint checks
         run: git fetch --no-tags origin sdkmax-dev
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -153,7 +157,7 @@ jobs:
         working-directory: web/classic
         run: VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -275,13 +279,16 @@ jobs:
     needs: [resolve-ref]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      actual_sha: ${{ steps.verify.outputs.actual_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 0
 
       - name: Verify checked-out commit matches resolved target_ref
+        id: verify
         env:
           EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
         run: |
@@ -289,6 +296,7 @@ jobs:
           echo "target_ref:        ${{ inputs.target_ref }}"
           echo "actual HEAD SHA:   $ACTUAL"
           echo "expected HEAD SHA: $EXPECTED"
+          echo "actual_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build."
             exit 1
@@ -297,7 +305,7 @@ jobs:
       - name: Fetch sdkmax-dev for diff-scoped typecheck
         run: git fetch --no-tags origin sdkmax-dev
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -353,13 +361,16 @@ jobs:
     needs: [resolve-ref]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      actual_sha: ${{ steps.verify.outputs.actual_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 0
 
       - name: Verify checked-out commit matches resolved target_ref
+        id: verify
         env:
           EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
         run: |
@@ -367,14 +378,30 @@ jobs:
           echo "target_ref:        ${{ inputs.target_ref }}"
           echo "actual HEAD SHA:   $ACTUAL"
           echo "expected HEAD SHA: $EXPECTED"
+          echo "actual_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to scan."
             exit 1
           fi
 
-      - name: Install gitleaks (OSS binary, no license required)
+      - name: Install gitleaks (OSS binary, checksum-verified)
+        # Pinned to an exact version and checksum, not "latest": the tarball
+        # is downloaded, its SHA-256 is compared byte-for-byte against the
+        # value published in gitleaks' own release checksums file (fetched
+        # separately, not derived from the tarball itself), and installation
+        # aborts immediately on any mismatch. Never executes an unverified
+        # binary.
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
         run: |
-          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          set -euo pipefail
+          curl -sSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" > gitleaks.tar.gz.sha256
+          if ! sha256sum -c gitleaks.tar.gz.sha256; then
+            echo "::error::gitleaks tarball checksum mismatch - refusing to install or execute it"
+            exit 1
+          fi
           tar -xzf gitleaks.tar.gz gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
 
@@ -402,12 +429,17 @@ jobs:
     needs: [resolve-ref, backend, frontend, secret-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      actual_sha: ${{ steps.verify.outputs.actual_sha }}
+      image_id: ${{ steps.build.outputs.imageid }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.target_ref }}
 
       - name: Verify checked-out commit matches resolved target_ref
+        id: verify
         env:
           EXPECTED: ${{ needs.resolve-ref.outputs.sha }}
         run: |
@@ -415,6 +447,7 @@ jobs:
           echo "target_ref:        ${{ inputs.target_ref }}"
           echo "actual HEAD SHA:   $ACTUAL"
           echo "expected HEAD SHA: $EXPECTED"
+          echo "actual_sha=$ACTUAL" >> "$GITHUB_OUTPUT"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
             echo "::error::Checked-out commit ($ACTUAL) does not match target_ref's resolved commit ($EXPECTED). Refusing to build."
             exit 1
@@ -423,11 +456,11 @@ jobs:
       - name: Write placeholder VERSION file
         run: echo "google-primary-login-$(git rev-parse --short=12 HEAD)" > VERSION
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build image (no push)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
@@ -452,3 +485,103 @@ jobs:
           echo "- Image ID: \`${{ steps.build.outputs.imageid }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Pushed to a registry: **no** (this workflow never pushes anywhere)" >> "$GITHUB_STEP_SUMMARY"
+
+  verification-summary:
+    name: Verification summary
+    needs: [resolve-ref, backend, frontend, secret-scan, docker-build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # This job deliberately does NOT check out the repository: it only
+      # reads the outputs already produced by the jobs above (each of which
+      # independently resolved and verified its own checked-out HEAD SHA) and
+      # GitHub's own run metadata (github.run_id / github.run_number). This
+      # is the artifact meant to answer, on its own and without needing log
+      # access, the exact question an independent reviewer could not
+      # previously confirm from run metadata alone: which commit each job
+      # actually built, and whether it matched target_ref.
+      - name: Build verification summary
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          RESOLVED_SHA: ${{ needs.resolve-ref.outputs.sha }}
+          RESOLVE_REF_RESULT: ${{ needs.resolve-ref.result }}
+          BACKEND_SHA: ${{ needs.backend.outputs.actual_sha }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_SHA: ${{ needs.frontend.outputs.actual_sha }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          SECRET_SCAN_SHA: ${{ needs.secret-scan.outputs.actual_sha }}
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          DOCKER_SHA: ${{ needs.docker-build.outputs.actual_sha }}
+          DOCKER_RESULT: ${{ needs.docker-build.result }}
+          DOCKER_IMAGE_ID: ${{ needs.docker-build.outputs.image_id }}
+          DOCKER_DIGEST: ${{ needs.docker-build.outputs.digest }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          ALL_SHAS_MATCH="true"
+          for sha in "$BACKEND_SHA" "$FRONTEND_SHA" "$SECRET_SCAN_SHA" "$DOCKER_SHA"; do
+            if [ -n "$sha" ] && [ "$sha" != "$RESOLVED_SHA" ]; then
+              ALL_SHAS_MATCH="false"
+            fi
+          done
+
+          {
+            echo "SDKMAX feature-build-verify.yml verification summary"
+            echo "======================================================"
+            echo "Repository:        $REPOSITORY"
+            echo "Run URL:           https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+            echo "Run ID:            $RUN_ID"
+            echo "Run number:        $RUN_NUMBER"
+            echo "Requested target_ref: $TARGET_REF"
+            echo "Resolved HEAD SHA:    $RESOLVED_SHA"
+            echo "All jobs' actual checked-out HEAD matches resolved SHA: $ALL_SHAS_MATCH"
+            echo ""
+            echo "Per-job results and actual checked-out HEAD:"
+            echo "  resolve-ref:  result=$RESOLVE_REF_RESULT"
+            echo "  backend:      result=$BACKEND_RESULT      actual_head=$BACKEND_SHA"
+            echo "  frontend:     result=$FRONTEND_RESULT     actual_head=$FRONTEND_SHA"
+            echo "  secret-scan:  result=$SECRET_SCAN_RESULT  actual_head=$SECRET_SCAN_SHA"
+            echo "  docker-build: result=$DOCKER_RESULT       actual_head=$DOCKER_SHA"
+            echo ""
+            echo "Docker image (local only, never pushed to any registry):"
+            echo "  Local tag: sdkmax-new-api:google-primary-login-verify"
+            echo "  Image ID:  ${DOCKER_IMAGE_ID:-<not produced - docker-build did not complete>}"
+            echo "  Digest:    ${DOCKER_DIGEST:-<not produced - docker-build did not complete>}"
+            echo "  Pushed to a registry: no"
+            echo ""
+            echo "This file contains no environment variables, secrets, tokens, or full job logs -"
+            echo "only the job results and checked-out commit SHAs already visible in the GitHub"
+            echo "Actions UI for this run, reformatted for offline/independent review."
+          } | tee verification-summary.txt
+
+          {
+            echo "### Verification summary"
+            echo ""
+            echo "- Run: [$RUN_ID](https://github.com/$REPOSITORY/actions/runs/$RUN_ID) (#$RUN_NUMBER)"
+            echo "- Requested \`target_ref\`: \`$TARGET_REF\`"
+            echo "- Resolved SHA: \`$RESOLVED_SHA\`"
+            echo "- All jobs built the resolved SHA: **$ALL_SHAS_MATCH**"
+            echo "- backend: **$BACKEND_RESULT** (\`$BACKEND_SHA\`)"
+            echo "- frontend: **$FRONTEND_RESULT** (\`$FRONTEND_SHA\`)"
+            echo "- secret-scan: **$SECRET_SCAN_RESULT** (\`$SECRET_SCAN_SHA\`)"
+            echo "- docker-build: **$DOCKER_RESULT** (\`$DOCKER_SHA\`)"
+            echo "- Docker Image ID: \`${DOCKER_IMAGE_ID:-N/A}\`"
+            echo "- Docker digest: \`${DOCKER_DIGEST:-N/A}\`"
+            echo "- Download \`verification-summary.txt\` from this run's Artifacts for an offline copy."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ALL_SHAS_MATCH" != "true" ]; then
+            echo "::error::At least one job's actual checked-out HEAD did not match the resolved target_ref SHA. See the summary above."
+            exit 1
+          fi
+
+      - name: Upload verification summary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verification-summary
+          path: verification-summary.txt
+          retention-days: 90
