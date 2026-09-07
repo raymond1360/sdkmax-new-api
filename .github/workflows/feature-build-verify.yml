@@ -209,8 +209,7 @@ jobs:
             [ -z "$f" ] && continue
             MATCH=$(echo "$VET_OUT" | grep -F "$f" || true)
             if [ -n "$MATCH" ]; then
-              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}
-"
+              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}"$'\n'
             fi
           done <<< "$CHANGED"
           if [ -n "$NEW_FINDINGS" ]; then
@@ -250,8 +249,7 @@ jobs:
             [ -z "$f" ] && continue
             MATCH=$(echo "$TEST_OUT" | grep -F "$f" || true)
             if [ -n "$MATCH" ]; then
-              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}
-"
+              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}"$'\n'
             fi
           done <<< "$CHANGED"
           if [ -n "$NEW_FINDINGS" ]; then
@@ -336,8 +334,7 @@ jobs:
             [ -z "$f" ] && continue
             MATCH=$(echo "$TS_OUT" | grep -F "$f" || true)
             if [ -n "$MATCH" ]; then
-              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}
-"
+              NEW_FINDINGS="${NEW_FINDINGS}${MATCH}"$'\n'
             fi
           done <<< "$CHANGED"
           if [ -n "$NEW_FINDINGS" ]; then
