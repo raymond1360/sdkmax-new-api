@@ -271,7 +271,22 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	// Refuse to silently create a second account when this email is already
 	// registered under a different login method. The user must sign in with
 	// their original method and bind this provider from account settings.
-	if oauthUser.Email != "" && model.IsEmailAlreadyTaken(oauthUser.Email) {
+	// Normalize first so a whitespace-only email (which model.IsEmailAlreadyTaken
+	// would otherwise treat as "no email" on its own) can't slip past this check.
+	if common.NormalizeEmail(oauthUser.Email) != "" && model.IsEmailAlreadyTaken(oauthUser.Email) {
+		// Before declaring a conflict, re-check whether a concurrent request
+		// for this exact provider identity won the race and already created
+		// the account between the IsUserIDTaken check at the top of this
+		// function and this point (see the transaction-recovery comment
+		// below for the same race from a different angle). If so, this is
+		// not a genuine conflict with a different account - it is the same
+		// login racing with itself - so sign in as that user instead.
+		if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+			recovered := &model.User{}
+			if fillErr := provider.FillUserByProviderID(recovered, oauthUser.ProviderUserID); fillErr == nil && recovered.Id != 0 {
+				return recovered, nil
+			}
+		}
 		return nil, &OAuthEmailConflictError{}
 	}
 
@@ -333,6 +348,29 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			return nil
 		})
 		if err != nil {
+			// Two concurrent first-time logins for the same Google (or other
+			// custom OAuth) identity can both pass the IsUserIDTaken check
+			// above before either has committed. Depending on exactly how the
+			// race lands, the loser's transaction can fail in more than one
+			// way: a raw DB unique-constraint violation on (provider_id,
+			// provider_user_id), CreateUserOAuthBindingWithTx's own
+			// check-then-insert returning its plain "already bound to another
+			// user" error, or even an unrelated username collision from the
+			// non-atomic GetMaxUserId()+1 username generation racing with the
+			// winner's insert. In every one of those cases the underlying cause is the
+			// same: a binding for this exact provider identity now exists
+			// because a concurrent request already created it. So rather than
+			// pattern-matching every possible failure shape, always attempt
+			// to read that binding back; if it exists, the loser signs in as
+			// the same user the winner just created instead of surfacing a
+			// raw error. If no such binding exists, this was a genuine,
+			// unrelated failure and the original error is returned unchanged.
+			{
+				recovered := &model.User{}
+				if fillErr := provider.FillUserByProviderID(recovered, oauthUser.ProviderUserID); fillErr == nil && recovered.Id != 0 {
+					return recovered, nil
+				}
+			}
 			return nil, err
 		}
 
