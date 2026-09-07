@@ -181,16 +181,21 @@ func main() {
 	server.Use(middleware.PoweredBy())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
-	// Initialize session store
+	// Initialize session store. These are baseline defaults used only until
+	// middleware.DynamicSessionCookieOptions runs on each request and
+	// recomputes Secure/SameSite from the actual request scheme (see that
+	// middleware for why Secure can't be a fixed value and why SameSite is
+	// Lax, not Strict).
 	store := cookie.NewStore([]byte(common.SessionSecret))
 	store.Options(sessions.Options{
 		Path:     "/",
 		MaxAge:   2592000, // 30 days
 		HttpOnly: true,
 		Secure:   false,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	})
 	server.Use(sessions.Sessions("session", store))
+	server.Use(middleware.DynamicSessionCookieOptions())
 
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()

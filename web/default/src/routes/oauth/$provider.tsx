@@ -35,6 +35,26 @@ type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
 }
 
+/**
+ * Only allow post-login navigation to an in-site relative path. This blocks
+ * open-redirect payloads passed via the `redirect` query param (absolute
+ * URLs to other domains, protocol-relative `//evil.example`, and
+ * `javascript:`/other schemes all fail this check and fall back to the
+ * default `/dashboard`).
+ */
+function isSafeInternalRedirect(
+  target: string | undefined | null
+): target is string {
+  if (!target) return false
+  if (!target.startsWith('/')) return false
+  if (target.startsWith('//')) return false
+  if (target.startsWith('/\\')) return false
+  // Defensively reject anything that looks like it embeds a URL scheme
+  // (e.g. a path containing a stray "javascript:" or "https:").
+  if (/^\/\s*[a-z][a-z0-9+.-]*:/i.test(target)) return false
+  return true
+}
+
 function OAuthCallback() {
   const navigate = useNavigate()
   const { provider } = useParams({ from: '/oauth/$provider' }) as {
@@ -143,7 +163,8 @@ function OAuthCallback() {
       }
 
       const redirectAfterLogin = (target?: string) => {
-        const to = target || search?.redirect || '/dashboard'
+        const requested = target || search?.redirect
+        const to = isSafeInternalRedirect(requested) ? requested : '/dashboard'
         safeNavigate(to)
         toast.success(i18next.t('Signed in successfully!'))
       }

@@ -56,15 +56,23 @@ func GetAllProviders() map[string]Provider {
 	return result
 }
 
+// ConfigurableOAuthProvider is implemented by custom OAuth providers backed
+// by a custom_oauth_providers row (both the generic provider and the
+// Google-specific provider, which embeds it and promotes GetConfig()).
+type ConfigurableOAuthProvider interface {
+	Provider
+	GetConfig() *model.CustomOAuthProvider
+}
+
 // GetEnabledCustomProviders returns all enabled custom OAuth providers
-func GetEnabledCustomProviders() []*GenericOAuthProvider {
+func GetEnabledCustomProviders() []ConfigurableOAuthProvider {
 	mu.RLock()
 	defer mu.RUnlock()
-	var result []*GenericOAuthProvider
+	var result []ConfigurableOAuthProvider
 	for name, provider := range providers {
 		if customProviderSlugs[name] {
-			if gp, ok := provider.(*GenericOAuthProvider); ok && gp.IsEnabled() {
-				result = append(result, gp)
+			if cp, ok := provider.(ConfigurableOAuthProvider); ok && cp.IsEnabled() {
+				result = append(result, cp)
 			}
 		}
 	}
@@ -105,7 +113,7 @@ func LoadCustomProviders() error {
 
 	// Register each custom provider
 	for _, config := range customProviders {
-		provider := NewGenericOAuthProvider(config)
+		provider := newConfigurableOAuthProvider(config)
 		RegisterCustom(config.Slug, provider)
 		common.SysLog("Loaded custom OAuth provider: " + config.Name + " (" + config.Slug + ")")
 	}
@@ -121,11 +129,22 @@ func ReloadCustomProviders() error {
 
 // RegisterOrUpdateCustomProvider registers or updates a single custom provider
 func RegisterOrUpdateCustomProvider(config *model.CustomOAuthProvider) {
-	provider := NewGenericOAuthProvider(config)
+	provider := newConfigurableOAuthProvider(config)
 	mu.Lock()
 	defer mu.Unlock()
 	providers[config.Slug] = provider
 	customProviderSlugs[config.Slug] = true
+}
+
+// newConfigurableOAuthProvider picks the concrete provider implementation
+// for a custom_oauth_providers row based on its ProviderType. Google rows
+// get ID Token verification (oauth/google.go); everything else keeps the
+// existing generic userinfo-endpoint flow.
+func newConfigurableOAuthProvider(config *model.CustomOAuthProvider) ConfigurableOAuthProvider {
+	if config.ProviderType == GoogleProviderType {
+		return NewGoogleOAuthProvider(config)
+	}
+	return NewGenericOAuthProvider(config)
 }
 
 // UnregisterCustomProvider unregisters a custom provider by slug

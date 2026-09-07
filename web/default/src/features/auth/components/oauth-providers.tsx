@@ -121,10 +121,12 @@ export function OAuthProviders({
     })
   }
 
-  // Custom OAuth providers
+  // Custom OAuth providers (Google gets its own primary button elsewhere —
+  // see <GoogleSignInButton> — so it is excluded from this secondary list)
   const customProviders = status?.custom_oauth_providers
   if (customProviders && customProviders.length > 0) {
     for (const provider of customProviders) {
+      if (provider.provider_type === 'google') continue
       providerButtons.push({
         key: `custom-${provider.slug}`,
         label: t('Continue with {{name}}', { name: provider.name }),

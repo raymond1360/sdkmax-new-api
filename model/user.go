@@ -681,8 +681,20 @@ func (user *User) FillUserByTelegramId() error {
 	return nil
 }
 
+// IsEmailAlreadyTaken reports whether email (after trimming and ASCII
+// lowercasing, see common.NormalizeEmail) matches any existing user record,
+// including soft-deleted ones (Unscoped). It compares against
+// LOWER(TRIM(email)) rather than the raw stored value so that whitespace or
+// case differences - and, if historical data already contains more than one
+// row for the same normalized email - cannot bypass this check; any match
+// count greater than zero is treated as taken, not just exactly one. This
+// never modifies the stored email value on any existing row.
 func IsEmailAlreadyTaken(email string) bool {
-	return DB.Unscoped().Where("email = ?", email).Find(&User{}).RowsAffected == 1
+	normalized := common.NormalizeEmail(email)
+	if normalized == "" {
+		return false
+	}
+	return DB.Unscoped().Where("LOWER(TRIM(email)) = ?", normalized).Find(&User{}).RowsAffected > 0
 }
 
 func IsWeChatIdAlreadyTaken(wechatId string) bool {

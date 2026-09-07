@@ -144,18 +144,31 @@ func GetStatus(c *gin.Context) {
 			ClientId              string `json:"client_id"`
 			AuthorizationEndpoint string `json:"authorization_endpoint"`
 			Scopes                string `json:"scopes"`
+			ProviderType          string `json:"provider_type"`
 		}
 		providersInfo := make([]CustomOAuthInfo, 0, len(customProviders))
 		for _, p := range customProviders {
 			config := p.GetConfig()
+			// For provider_type=google, never echo config.AuthorizationEndpoint
+			// straight from the database: it is admin/API writable, and this
+			// is a public, unauthenticated endpoint the frontend uses to build
+			// the browser's redirect target. A tampered or misconfigured row
+			// must not be able to send users to a non-Google login page (see
+			// P1-02; the matching runtime enforcement for token exchange lives
+			// in oauth.GoogleOAuthProvider.effectiveConfig).
+			authEndpoint := config.AuthorizationEndpoint
+			if config.ProviderType == oauth.GoogleProviderType {
+				authEndpoint = oauth.GoogleAuthorizationEndpoint
+			}
 			providersInfo = append(providersInfo, CustomOAuthInfo{
 				Id:                    config.Id,
 				Name:                  config.Name,
 				Slug:                  config.Slug,
 				Icon:                  config.Icon,
 				ClientId:              config.ClientId,
-				AuthorizationEndpoint: config.AuthorizationEndpoint,
+				AuthorizationEndpoint: authEndpoint,
 				Scopes:                config.Scopes,
+				ProviderType:          config.ProviderType,
 			})
 		}
 		data["custom_oauth_providers"] = providersInfo
