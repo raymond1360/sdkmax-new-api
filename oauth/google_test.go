@@ -77,10 +77,6 @@ func bigIntToBytes(v int64) []byte {
 	return buf[i:]
 }
 
-func (f *fakeGoogleIssuer) wellKnownURL() string {
-	return f.server.URL + "/.well-known/openid-configuration"
-}
-
 type testClaims struct {
 	Issuer        string `json:"iss,omitempty"`
 	Audience      string `json:"aud,omitempty"`
@@ -105,14 +101,23 @@ func (f *fakeGoogleIssuer) sign(t *testing.T, claims testClaims) string {
 	return signed
 }
 
-func newTestGoogleProvider(issuer *fakeGoogleIssuer) *GoogleOAuthProvider {
+func newTestGoogleProvider(t *testing.T, issuer *fakeGoogleIssuer) *GoogleOAuthProvider {
+	t.Helper()
+
+	// Point discovery at the local fake issuer via the test-only override,
+	// not via config.WellKnown: production code ignores WellKnown entirely
+	// (see P1-02 / issuer() in oauth/google.go), so exercising that field
+	// here would no longer reach the fake server at all.
+	previous := googleIssuerOverrideForTests
+	googleIssuerOverrideForTests = issuer.server.URL
+	t.Cleanup(func() { googleIssuerOverrideForTests = previous })
+
 	config := &model.CustomOAuthProvider{
 		Id:           1,
 		Name:         "Google",
 		Slug:         "google",
 		ClientId:     testGoogleClientID,
 		ProviderType: GoogleProviderType,
-		WellKnown:    issuer.wellKnownURL(),
 	}
 	return NewGoogleOAuthProvider(config)
 }
@@ -140,7 +145,7 @@ func validClaims(issuer *fakeGoogleIssuer) testClaims {
 
 func TestGoogleOAuthProvider_GetUserInfo_Success(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	idToken := issuer.sign(t, validClaims(issuer))
 	user, err := provider.GetUserInfo(ctxWithNonce("expected-nonce"), &OAuthToken{IDToken: idToken})
@@ -160,7 +165,7 @@ func TestGoogleOAuthProvider_GetUserInfo_Success(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_MissingIDToken(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	_, err := provider.GetUserInfo(ctxWithNonce("expected-nonce"), &OAuthToken{IDToken: ""})
 	if err == nil {
@@ -170,7 +175,7 @@ func TestGoogleOAuthProvider_GetUserInfo_MissingIDToken(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_WrongIssuer(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	claims.Issuer = "https://not-really-google.example"
@@ -184,7 +189,7 @@ func TestGoogleOAuthProvider_GetUserInfo_WrongIssuer(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_WrongAudience(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	claims.Audience = "some-other-client-id.apps.googleusercontent.com"
@@ -198,7 +203,7 @@ func TestGoogleOAuthProvider_GetUserInfo_WrongAudience(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_Expired(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	past := time.Now().Add(-1 * time.Hour)
@@ -214,7 +219,7 @@ func TestGoogleOAuthProvider_GetUserInfo_Expired(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_EmailNotVerified(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	claims.EmailVerified = boolPtr(false)
@@ -228,7 +233,7 @@ func TestGoogleOAuthProvider_GetUserInfo_EmailNotVerified(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_NonceMismatch(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	idToken := issuer.sign(t, validClaims(issuer))
 	_, err := provider.GetUserInfo(ctxWithNonce("some-other-nonce"), &OAuthToken{IDToken: idToken})
@@ -239,7 +244,7 @@ func TestGoogleOAuthProvider_GetUserInfo_NonceMismatch(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_MissingNonceInContext(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	idToken := issuer.sign(t, validClaims(issuer))
 	// No nonce in context at all (simulates a forged/replayed callback that
@@ -252,7 +257,7 @@ func TestGoogleOAuthProvider_GetUserInfo_MissingNonceInContext(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_MissingNonceInToken(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	claims.Nonce = ""
@@ -266,7 +271,7 @@ func TestGoogleOAuthProvider_GetUserInfo_MissingNonceInToken(t *testing.T) {
 
 func TestGoogleOAuthProvider_GetUserInfo_EmptySubject(t *testing.T) {
 	issuer := newFakeGoogleIssuer(t)
-	provider := newTestGoogleProvider(issuer)
+	provider := newTestGoogleProvider(t, issuer)
 
 	claims := validClaims(issuer)
 	claims.Subject = ""
@@ -278,6 +283,20 @@ func TestGoogleOAuthProvider_GetUserInfo_EmptySubject(t *testing.T) {
 	}
 }
 
+func TestGoogleOAuthProvider_GetUserInfo_EmptyEmail(t *testing.T) {
+	issuer := newFakeGoogleIssuer(t)
+	provider := newTestGoogleProvider(t, issuer)
+
+	claims := validClaims(issuer)
+	claims.Email = ""
+	idToken := issuer.sign(t, claims)
+
+	_, err := provider.GetUserInfo(ctxWithNonce("expected-nonce"), &OAuthToken{IDToken: idToken})
+	if err == nil {
+		t.Fatal("expected error for empty email even with email_verified=true, got nil")
+	}
+}
+
 func TestGoogleOAuthProvider_Issuer_DefaultsToGoogle(t *testing.T) {
 	provider := NewGoogleOAuthProvider(&model.CustomOAuthProvider{ClientId: "x"})
 	if got := provider.issuer(); got != GoogleDefaultIssuer {
@@ -285,13 +304,129 @@ func TestGoogleOAuthProvider_Issuer_DefaultsToGoogle(t *testing.T) {
 	}
 }
 
-func TestGoogleOAuthProvider_Issuer_DerivedFromWellKnown(t *testing.T) {
+// P1-02: custom_oauth_providers.well_known is admin/API writable and can
+// also be edited directly in the database, bypassing model-layer
+// validation. A provider_type=google row must never let that field pick
+// which issuer it verifies ID Tokens against, even when it looks like a
+// plausible OIDC discovery URL.
+func TestGoogleOAuthProvider_Issuer_IgnoresConfigWellKnown(t *testing.T) {
 	provider := NewGoogleOAuthProvider(&model.CustomOAuthProvider{
 		ClientId:  "x",
-		WellKnown: "https://accounts.example.com/.well-known/openid-configuration",
+		WellKnown: "https://accounts.evil.example/.well-known/openid-configuration",
 	})
-	want := "https://accounts.example.com"
-	if got := provider.issuer(); got != want {
-		t.Errorf("expected issuer %s, got %s", want, got)
+	if got := provider.issuer(); got != GoogleDefaultIssuer {
+		t.Errorf("expected config.WellKnown to be ignored and issuer to stay %s, got %s", GoogleDefaultIssuer, got)
+	}
+}
+
+// P1-02: effectiveConfig is what ExchangeToken and issuer() actually use.
+// It must force Google's official endpoints regardless of adversarial
+// values stored on the row (simulating a tampered or misconfigured
+// custom_oauth_providers record).
+func TestGoogleOAuthProvider_EffectiveConfig_IgnoresTamperedEndpoints(t *testing.T) {
+	provider := NewGoogleOAuthProvider(&model.CustomOAuthProvider{
+		ClientId:              "x",
+		AuthorizationEndpoint: "http://evil.example/auth",
+		TokenEndpoint:         "http://evil.example/token",
+		WellKnown:             "http://evil.example/.well-known/openid-configuration",
+		AuthStyle:             AuthStyleInHeader,
+	})
+
+	effective := provider.effectiveConfig()
+	if effective.AuthorizationEndpoint != GoogleAuthorizationEndpoint {
+		t.Errorf("expected authorization_endpoint %s, got %s", GoogleAuthorizationEndpoint, effective.AuthorizationEndpoint)
+	}
+	if effective.TokenEndpoint != GoogleTokenEndpoint {
+		t.Errorf("expected token_endpoint %s, got %s", GoogleTokenEndpoint, effective.TokenEndpoint)
+	}
+	if effective.WellKnown != GoogleDiscoveryURL {
+		t.Errorf("expected well_known %s, got %s", GoogleDiscoveryURL, effective.WellKnown)
+	}
+	if effective.AuthStyle != AuthStyleInParams {
+		t.Errorf("expected auth_style forced to AuthStyleInParams, got %d", effective.AuthStyle)
+	}
+
+	// The original config on the provider itself must be untouched -
+	// effectiveConfig returns a copy, not a mutation in place.
+	original := provider.GetConfig()
+	if original.TokenEndpoint != "http://evil.example/token" {
+		t.Errorf("effectiveConfig must not mutate the underlying stored config, got token_endpoint=%s", original.TokenEndpoint)
+	}
+}
+
+// TestValidateGoogleClaims exercises the post-verification claims check
+// directly (no network, no signing) since it is a pure function of already
+// go-oidc-verified claims. This is the fast, exhaustive complement to the
+// GetUserInfo_* tests above, which each cost a full fake-issuer round trip.
+func TestValidateGoogleClaims(t *testing.T) {
+	validSub := "1234567890"
+	validEmail := "user@example.com"
+
+	tests := []struct {
+		name        string
+		claims      googleIDTokenClaims
+		expectedNon string
+		wantErr     bool
+	}{
+		{
+			name:        "valid claims pass",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: validEmail, EmailVerified: true, Nonce: "n1"},
+			expectedNon: "n1",
+			wantErr:     false,
+		},
+		{
+			name:        "nonce mismatch rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: validEmail, EmailVerified: true, Nonce: "n1"},
+			expectedNon: "n2",
+			wantErr:     true,
+		},
+		{
+			name:        "empty expected nonce rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: validEmail, EmailVerified: true, Nonce: "n1"},
+			expectedNon: "",
+			wantErr:     true,
+		},
+		{
+			name:        "empty token nonce rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: validEmail, EmailVerified: true, Nonce: ""},
+			expectedNon: "n1",
+			wantErr:     true,
+		},
+		{
+			name:        "email_verified=false rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: validEmail, EmailVerified: false, Nonce: "n1"},
+			expectedNon: "n1",
+			wantErr:     true,
+		},
+		{
+			name:        "email_verified=true with empty email rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: "", EmailVerified: true, Nonce: "n1"},
+			expectedNon: "n1",
+			wantErr:     true,
+		},
+		{
+			name:        "email_verified=true with whitespace-only email rejected",
+			claims:      googleIDTokenClaims{Sub: validSub, Email: "   ", EmailVerified: true, Nonce: "n1"},
+			expectedNon: "n1",
+			wantErr:     true,
+		},
+		{
+			name:        "empty sub rejected",
+			claims:      googleIDTokenClaims{Sub: "", Email: validEmail, EmailVerified: true, Nonce: "n1"},
+			expectedNon: "n1",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGoogleClaims(tt.claims, tt.expectedNon, "Google")
+			if tt.wantErr && err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
 	}
 }
