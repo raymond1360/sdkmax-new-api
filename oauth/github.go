@@ -50,7 +50,7 @@ func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-GitHub] ExchangeToken: code=%s...", code[:min(len(code), 10)])
+	logger.LogDebug(ctx, "[OAuth-GitHub] ExchangeToken: code received (len=%d)", len(code))
 
 	values := map[string]string{
 		"client_id":     common.GitHubClientId,

@@ -247,6 +247,8 @@ oauth.connect_failed: "Unable to connect to {{.Provider}} server, please try aga
 oauth.token_failed: "Failed to get token from {{.Provider}}, please check settings"
 oauth.user_info_empty: "{{.Provider}} returned empty user info, please check settings"
 oauth.trust_level_low: "Linux DO trust level does not meet the minimum required by administrator"
+oauth.email_not_verified: "Your {{.Provider}} email is not verified. Please verify your email with {{.Provider}} first"
+oauth.email_conflict: "This email is already registered. Please sign in with your original method first, then bind your Google account from account settings."
 
 # Model layer error messages
 redeem.failed: "Redemption failed, please try again later"
@@ -277,3 +279,4 @@ custom_oauth.name_empty: "Provider name cannot be empty"
 custom_oauth.has_bindings: "Cannot delete provider with existing user bindings"
 custom_oauth.binding_not_found: "OAuth binding not found"
 custom_oauth.provider_id_field_invalid: "Could not extract user ID from provider response"
+custom_oauth.unbind_sole_method: "Cannot unbind: this is your only sign-in method. Please set a password or bind another sign-in method first."

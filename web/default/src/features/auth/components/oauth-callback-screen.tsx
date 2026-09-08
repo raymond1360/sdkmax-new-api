@@ -20,6 +20,7 @@ import { useMemo } from 'react'
 import { Loader2, Send, Shield, UserRound, type LucideIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { SiGithub, SiLinux, SiWechat } from 'react-icons/si'
+import { IconGoogle } from '@/assets/brand-icons'
 import { AuthLayout } from '../auth-layout'
 
 type OAuthCallbackScreenProps = {
@@ -40,6 +41,12 @@ const providerDictionary: Record<string, ProviderMeta> = {
     ),
   },
   oidc: { label: 'OIDC', Icon: Shield },
+  google: {
+    label: 'Google',
+    Icon: (props: { className?: string }) => (
+      <IconGoogle className={props.className} />
+    ),
+  },
   linuxdo: {
     label: 'LinuxDO',
     Icon: (props: { className?: string }) => (

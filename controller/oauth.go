@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,15 +20,21 @@ func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
 }
 
-// GenerateOAuthCode generates a state code for OAuth CSRF protection
+// GenerateOAuthCode generates a state code for OAuth CSRF protection.
+// It also generates a nonce, stored server-side alongside the state, for
+// providers that verify an ID Token (e.g. Google). The nonce is returned as
+// an additional top-level field so existing callers that only read
+// response.data (the state string) keep working unchanged.
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
 	state := common.GetRandomString(12)
+	nonce := common.GetRandomString(16)
 	affCode := c.Query("aff")
 	if affCode != "" {
 		session.Set("aff", affCode)
 	}
 	session.Set("oauth_state", state)
+	session.Set("oauth_nonce", nonce)
 	err := session.Save()
 	if err != nil {
 		common.ApiError(c, err)
@@ -37,6 +44,7 @@ func GenerateOAuthCode(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    state,
+		"nonce":   nonce,
 	})
 }
 
@@ -56,7 +64,8 @@ func HandleOAuth(c *gin.Context) {
 
 	// 1. Validate state (CSRF protection)
 	state := c.Query("state")
-	if state == "" || session.Get("oauth_state") == nil || state != session.Get("oauth_state").(string) {
+	sessionState, _ := session.Get("oauth_state").(string)
+	if state == "" || sessionState == "" || state != sessionState {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
@@ -64,10 +73,25 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
+	// State is single-use: consume it immediately so a replayed callback
+	// (browser back/forward, refresh, or a resubmitted request) fails the
+	// check above instead of re-running the login/bind flow.
+	sessionNonce, _ := session.Get("oauth_nonce").(string)
+	session.Delete("oauth_state")
+	session.Delete("oauth_nonce")
+	if err := session.Save(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	// Carry the nonce into the provider calls via context so providers that
+	// verify an ID Token (Google) can bind it to this request without
+	// storing per-request state on the shared provider instance.
+	ctx := context.WithValue(c.Request.Context(), oauth.NonceContextKey, sessionNonce)
+
 	// 2. Check if user is already logged in (bind flow)
 	username := session.Get("username")
 	if username != nil {
-		handleOAuthBind(c, provider)
+		handleOAuthBind(c, ctx, provider)
 		return
 	}
 
@@ -90,14 +114,14 @@ func HandleOAuth(c *gin.Context) {
 
 	// 5. Exchange code for token
 	code := c.Query("code")
-	token, err := provider.ExchangeToken(c.Request.Context(), code, c)
+	token, err := provider.ExchangeToken(ctx, code, c)
 	if err != nil {
 		handleOAuthError(c, err)
 		return
 	}
 
 	// 6. Get user info
-	oauthUser, err := provider.GetUserInfo(c.Request.Context(), token)
+	oauthUser, err := provider.GetUserInfo(ctx, token)
 	if err != nil {
 		handleOAuthError(c, err)
 		return
@@ -111,6 +135,8 @@ func HandleOAuth(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
 		case *OAuthRegistrationDisabledError:
 			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+		case *OAuthEmailConflictError:
+			common.ApiErrorI18n(c, i18n.MsgOAuthEmailConflict, providerParams(provider.GetName()))
 		default:
 			common.ApiError(c, err)
 		}
@@ -128,7 +154,7 @@ func HandleOAuth(c *gin.Context) {
 }
 
 // handleOAuthBind handles binding OAuth account to existing user
-func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
+func handleOAuthBind(c *gin.Context, ctx context.Context, provider oauth.Provider) {
 	if !provider.IsEnabled() {
 		common.ApiErrorI18n(c, i18n.MsgOAuthNotEnabled, providerParams(provider.GetName()))
 		return
@@ -136,14 +162,14 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 
 	// Exchange code for token
 	code := c.Query("code")
-	token, err := provider.ExchangeToken(c.Request.Context(), code, c)
+	token, err := provider.ExchangeToken(ctx, code, c)
 	if err != nil {
 		handleOAuthError(c, err)
 		return
 	}
 
 	// Get user info
-	oauthUser, err := provider.GetUserInfo(c.Request.Context(), token)
+	oauthUser, err := provider.GetUserInfo(ctx, token)
 	if err != nil {
 		handleOAuthError(c, err)
 		return
@@ -172,10 +198,15 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 		return
 	}
 
-	// Handle binding based on provider type
-	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
+	// Handle binding based on provider type. This must check the
+	// ConfigurableOAuthProvider interface, not the concrete
+	// *oauth.GenericOAuthProvider type: oauth.GoogleOAuthProvider embeds it
+	// but is a distinct concrete type, so a concrete-type assertion here
+	// would silently fall through to the built-in-provider branch below and
+	// never persist a Google identity binding.
+	if configurableProvider, ok := provider.(oauth.ConfigurableOAuthProvider); ok {
 		// Custom provider: use user_oauth_bindings table
-		err = model.UpdateUserOAuthBinding(user.Id, genericProvider.GetProviderId(), oauthUser.ProviderUserID)
+		err = model.UpdateUserOAuthBinding(user.Id, configurableProvider.GetConfig().Id, oauthUser.ProviderUserID)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -237,6 +268,28 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		return nil, &OAuthRegistrationDisabledError{}
 	}
 
+	// Refuse to silently create a second account when this email is already
+	// registered under a different login method. The user must sign in with
+	// their original method and bind this provider from account settings.
+	// Normalize first so a whitespace-only email (which model.IsEmailAlreadyTaken
+	// would otherwise treat as "no email" on its own) can't slip past this check.
+	if common.NormalizeEmail(oauthUser.Email) != "" && model.IsEmailAlreadyTaken(oauthUser.Email) {
+		// Before declaring a conflict, re-check whether a concurrent request
+		// for this exact provider identity won the race and already created
+		// the account between the IsUserIDTaken check at the top of this
+		// function and this point (see the transaction-recovery comment
+		// below for the same race from a different angle). If so, this is
+		// not a genuine conflict with a different account - it is the same
+		// login racing with itself - so sign in as that user instead.
+		if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+			recovered := &model.User{}
+			if fillErr := provider.FillUserByProviderID(recovered, oauthUser.ProviderUserID); fillErr == nil && recovered.Id != 0 {
+				return recovered, nil
+			}
+		}
+		return nil, &OAuthEmailConflictError{}
+	}
+
 	// Set up new user
 	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
 
@@ -269,8 +322,12 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
 	}
 
-	// Use transaction to ensure user creation and OAuth binding are atomic
-	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
+	// Use transaction to ensure user creation and OAuth binding are atomic.
+	// See the comment in handleOAuthBind: this must be an interface check,
+	// not a concrete *oauth.GenericOAuthProvider type assertion, or Google
+	// users would fall through to the built-in-provider branch below and
+	// never get a user_oauth_bindings row.
+	if configurableProvider, ok := provider.(oauth.ConfigurableOAuthProvider); ok {
 		// Custom provider: create user and binding in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			// Create user
@@ -281,7 +338,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			// Create OAuth binding
 			binding := &model.UserOAuthBinding{
 				UserId:         user.Id,
-				ProviderId:     genericProvider.GetProviderId(),
+				ProviderId:     configurableProvider.GetConfig().Id,
 				ProviderUserId: oauthUser.ProviderUserID,
 			}
 			if err := model.CreateUserOAuthBindingWithTx(tx, binding); err != nil {
@@ -291,6 +348,29 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			return nil
 		})
 		if err != nil {
+			// Two concurrent first-time logins for the same Google (or other
+			// custom OAuth) identity can both pass the IsUserIDTaken check
+			// above before either has committed. Depending on exactly how the
+			// race lands, the loser's transaction can fail in more than one
+			// way: a raw DB unique-constraint violation on (provider_id,
+			// provider_user_id), CreateUserOAuthBindingWithTx's own
+			// check-then-insert returning its plain "already bound to another
+			// user" error, or even an unrelated username collision from the
+			// non-atomic GetMaxUserId()+1 username generation racing with the
+			// winner's insert. In every one of those cases the underlying cause is the
+			// same: a binding for this exact provider identity now exists
+			// because a concurrent request already created it. So rather than
+			// pattern-matching every possible failure shape, always attempt
+			// to read that binding back; if it exists, the loser signs in as
+			// the same user the winner just created instead of surfacing a
+			// raw error. If no such binding exists, this was a genuine,
+			// unrelated failure and the original error is returned unchanged.
+			{
+				recovered := &model.User{}
+				if fillErr := provider.FillUserByProviderID(recovered, oauthUser.ProviderUserID); fillErr == nil && recovered.Id != 0 {
+					return recovered, nil
+				}
+			}
 			return nil, err
 		}
 
@@ -341,6 +421,14 @@ type OAuthRegistrationDisabledError struct{}
 
 func (e *OAuthRegistrationDisabledError) Error() string {
 	return "registration is disabled"
+}
+
+// OAuthEmailConflictError indicates the OAuth account's email is already
+// registered under a different (non-linked) account.
+type OAuthEmailConflictError struct{}
+
+func (e *OAuthEmailConflictError) Error() string {
+	return "email is already registered under another account"
 }
 
 // handleOAuthError handles OAuth errors and returns translated message

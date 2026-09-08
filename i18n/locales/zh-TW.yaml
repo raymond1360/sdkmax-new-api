@@ -248,6 +248,8 @@ oauth.connect_failed: "無法連接至 {{.Provider}} 伺服器，請稍後重試
 oauth.token_failed: "{{.Provider}} 獲取 Token 失敗，請檢查設定"
 oauth.user_info_empty: "{{.Provider}} 獲取使用者資訊為空，請檢查設定"
 oauth.trust_level_low: "Linux DO 信任等級未達到管理員設定的最低信任等級"
+oauth.email_not_verified: "您的 {{.Provider}} 郵箱尚未驗證，請先在 {{.Provider}} 完成郵箱驗證"
+oauth.email_conflict: "該郵箱已註冊，請先使用原登入方式登入，然後在個人設定中綁定 Google 帳號。"
 
 # Model layer error messages
 redeem.failed: "兌換失敗，請稍後重試"
@@ -278,3 +280,4 @@ custom_oauth.name_empty: "供應者名稱不能為空"
 custom_oauth.has_bindings: "無法刪除已有使用者綁定的供應者"
 custom_oauth.binding_not_found: "OAuth 綁定不存在"
 custom_oauth.provider_id_field_invalid: "無法從供應者響應中提取使用者 ID"
+custom_oauth.unbind_sole_method: "無法解綁：這是您唯一的登入方式。請先設定密碼或綁定其他登入方式後再解綁。"

@@ -53,6 +53,8 @@ import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/password-input'
 import { Turnstile } from '@/components/turnstile'
 import { login, wechatLoginByCode } from '@/features/auth/api'
+import { AuthDivider } from '@/features/auth/components/auth-divider'
+import { GoogleSignInButton } from '@/features/auth/components/google-sign-in-button'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
@@ -102,6 +104,9 @@ export function UserAuthForm({
     !passkeySupported ||
     (requiresLegalConsent && !agreedToLegal)
   const hasWeChatLogin = Boolean(status?.wechat_login)
+  const hasGoogleOAuth = Boolean(
+    status?.custom_oauth_providers?.some((p) => p.provider_type === 'google')
+  )
   const hasOAuthLogin = Boolean(
     status?.github_oauth ||
     status?.discord_oauth ||
@@ -332,6 +337,16 @@ export function UserAuthForm({
         className={cn('grid gap-4', className)}
         {...props}
       >
+        {hasGoogleOAuth && (
+          <div className='space-y-3'>
+            <GoogleSignInButton
+              status={status}
+              disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+            />
+            {(hasAlternativeLogin || passwordLoginEnabled) && <AuthDivider />}
+          </div>
+        )}
+
         {hasAlternativeLogin && alternativeLoginMethods}
 
         {passwordLoginEnabled && (

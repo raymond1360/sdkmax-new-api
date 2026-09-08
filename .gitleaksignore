@@ -1,0 +1,50 @@
+# gitleaks baseline — manually verified, pre-existing, non-secret false positives.
+#
+# Every entry below was reviewed line-by-line (file, line, rule ID, and the
+# actual matched text) before being added here. None of them are related to
+# the Google primary-login feature or to CI infrastructure changes; all
+# predate both. Full per-entry justification is recorded in
+# docs/deployment/CLAUDE_GOOGLE_LOGIN_PRE_PRODUCTION_CHECK.md (deliberately
+# summarized without reproducing the matched text here, to avoid this file
+# itself re-triggering the same heuristics it documents).
+#
+# This file only suppresses `gitleaks dir` (working-tree snapshot) findings
+# by exact fingerprint (file:rule:line). It intentionally does NOT disable
+# any rule globally, and it is never used for the incremental `gitleaks git`
+# scan of new commits (see feature-build-verify.yml), which must always
+# come back with zero findings on its own.
+#
+# Never add Client Secrets, tokens, real emails, or `.env` contents here —
+# doing so would mean the secret already leaked into the working tree, which
+# is a "stop and rotate" situation, not an allowlist situation.
+
+# Docker Hub image tag literal in a workflow file, not a credential.
+.github/workflows/docker-image-nightly.yml:generic-api-key:105
+.github/workflows/docker-image-nightly.yml:generic-api-key:106
+
+# Illustrative example value inside a code comment describing a log-masking
+# regex; the value itself is never used anywhere, only shown as documentation.
+common/str.go:gcp-api-key:261
+
+# Unit test fixtures seeding fake placeholder token values into an in-memory
+# test database; never real credentials.
+controller/token_test.go:generic-api-key:395
+controller/token_test.go:generic-api-key:423
+controller/token_test.go:generic-api-key:450
+controller/token_test.go:generic-api-key:475
+
+# Static response header value (compatibility version marker) sent in
+# plaintext on every response; not a secret.
+middleware/auth.go:generic-api-key:148
+
+# Fixed, publicly documented upstream API request parameter values (see the
+# vendor's own public docs referenced in the adjacent code comment); not
+# credentials.
+relay/channel/task/jimeng/adaptor.go:generic-api-key:226
+relay/channel/task/jimeng/adaptor.go:generic-api-key:410
+relay/channel/task/jimeng/adaptor.go:generic-api-key:412
+
+# PEM header/footer delimiter boilerplate used to reformat a private key
+# that arrives as a function parameter; the key material itself is never
+# hardcoded in this file.
+relay/channel/vertex/service_account.go:private-key:68

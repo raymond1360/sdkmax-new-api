@@ -65,6 +65,21 @@ export function PresetSelector(props: PresetSelectorProps) {
     props.form.setValue('email_field', preset.email_field, {
       shouldDirty: true,
     })
+    props.form.setValue('provider_type', preset.providerType || '', {
+      shouldDirty: true,
+    })
+    if (preset.wellKnown) {
+      props.form.setValue('well_known', preset.wellKnown, {
+        shouldDirty: true,
+      })
+    }
+
+    if (!preset.needsBaseUrl) {
+      // Fixed-endpoint presets (e.g. Google) don't need a base URL - apply
+      // the absolute endpoints directly.
+      applyEndpoints(preset, '')
+      return
+    }
 
     // Apply base URL if already entered
     if (baseUrl) {
@@ -132,14 +147,20 @@ export function PresetSelector(props: PresetSelectorProps) {
             </SelectContent>
           </Select>
         </div>
-        <div className='space-y-1.5'>
-          <Label>{t('Base URL')}</Label>
-          <Input
-            placeholder={t('https://your-server.example.com')}
-            value={baseUrl}
-            onChange={(e) => handleBaseUrlChange(e.target.value)}
-          />
-        </div>
+        {(() => {
+          const preset = OAUTH_PRESETS.find((p) => p.key === selectedPreset)
+          if (preset && !preset.needsBaseUrl) return null
+          return (
+            <div className='space-y-1.5'>
+              <Label>{t('Base URL')}</Label>
+              <Input
+                placeholder={t('https://your-server.example.com')}
+                value={baseUrl}
+                onChange={(e) => handleBaseUrlChange(e.target.value)}
+              />
+            </div>
+          )
+        })()}
       </div>
     </SettingsControlGroup>
   )

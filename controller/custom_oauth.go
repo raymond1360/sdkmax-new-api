@@ -4,12 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/gin-gonic/gin"
@@ -28,6 +28,7 @@ type CustomOAuthProviderResponse struct {
 	TokenEndpoint         string `json:"token_endpoint"`
 	UserInfoEndpoint      string `json:"user_info_endpoint"`
 	Scopes                string `json:"scopes"`
+	ProviderType          string `json:"provider_type"`
 	UserIdField           string `json:"user_id_field"`
 	UsernameField         string `json:"username_field"`
 	DisplayNameField      string `json:"display_name_field"`
@@ -58,6 +59,7 @@ func toCustomOAuthProviderResponse(p *model.CustomOAuthProvider) *CustomOAuthPro
 		TokenEndpoint:         p.TokenEndpoint,
 		UserInfoEndpoint:      p.UserInfoEndpoint,
 		Scopes:                p.Scopes,
+		ProviderType:          p.ProviderType,
 		UserIdField:           p.UserIdField,
 		UsernameField:         p.UsernameField,
 		DisplayNameField:      p.DisplayNameField,
@@ -123,6 +125,7 @@ type CreateCustomOAuthProviderRequest struct {
 	TokenEndpoint         string `json:"token_endpoint" binding:"required"`
 	UserInfoEndpoint      string `json:"user_info_endpoint" binding:"required"`
 	Scopes                string `json:"scopes"`
+	ProviderType          string `json:"provider_type"`
 	UserIdField           string `json:"user_id_field"`
 	UsernameField         string `json:"username_field"`
 	DisplayNameField      string `json:"display_name_field"`
@@ -160,9 +163,15 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	targetURL = strings.TrimSpace(targetURL)
 
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		common.ApiErrorMsg(c, "Discovery URL 无效，仅支持 http/https")
+	// P2-02: this is a Root-only route, but it still lets an admin make the
+	// server issue an outbound request to an arbitrary URL. validateDiscoveryURL
+	// enforces https-only and blocks obviously-private hosts up front;
+	// newDiscoveryHTTPClient additionally re-validates every redirect hop
+	// and re-checks the actually-resolved IP immediately before connecting
+	// (closing the DNS-rebinding gap a pure pre-flight check would leave
+	// open). See controller/oauth_discovery_ssrf.go.
+	if _, err := validateDiscoveryURL(targetURL); err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 
@@ -176,7 +185,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	httpReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := newDiscoveryHTTPClient()
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		common.ApiErrorMsg(c, "获取 Discovery 配置失败: "+err.Error())
@@ -184,8 +193,10 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
+	limitedBody := io.LimitReader(resp.Body, discoveryMaxResponseBytes)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, _ := io.ReadAll(io.LimitReader(limitedBody, 512))
 		message := strings.TrimSpace(string(body))
 		if message == "" {
 			message = resp.Status
@@ -195,7 +206,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 
 	var discovery map[string]any
-	if err = common.DecodeJson(resp.Body, &discovery); err != nil {
+	if err = common.DecodeJson(limitedBody, &discovery); err != nil {
 		common.ApiErrorMsg(c, "解析 Discovery 配置失败: "+err.Error())
 		return
 	}
@@ -241,6 +252,7 @@ func CreateCustomOAuthProvider(c *gin.Context) {
 		TokenEndpoint:         req.TokenEndpoint,
 		UserInfoEndpoint:      req.UserInfoEndpoint,
 		Scopes:                req.Scopes,
+		ProviderType:          req.ProviderType,
 		UserIdField:           req.UserIdField,
 		UsernameField:         req.UsernameField,
 		DisplayNameField:      req.DisplayNameField,
@@ -278,6 +290,7 @@ type UpdateCustomOAuthProviderRequest struct {
 	TokenEndpoint         string  `json:"token_endpoint"`
 	UserInfoEndpoint      string  `json:"user_info_endpoint"`
 	Scopes                string  `json:"scopes"`
+	ProviderType          *string `json:"provider_type"` // Optional: if nil, keep existing
 	UserIdField           string  `json:"user_id_field"`
 	UsernameField         string  `json:"username_field"`
 	DisplayNameField      string  `json:"display_name_field"`
@@ -355,6 +368,9 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 	}
 	if req.Scopes != "" {
 		provider.Scopes = req.Scopes
+	}
+	if req.ProviderType != nil {
+		provider.ProviderType = *req.ProviderType
 	}
 	if req.UserIdField != "" {
 		provider.UserIdField = req.UserIdField
@@ -519,6 +535,38 @@ func GetUserOAuthBindingsByAdmin(c *gin.Context) {
 	})
 }
 
+// hasOtherLoginMethod reports whether userId would still be able to sign in
+// after removing the OAuth binding for excludeProviderId: a password, a
+// built-in OAuth identity (GitHub/Discord/OIDC/WeChat/Telegram/LinuxDO), or
+// another custom OAuth binding all count as an "other" method.
+func hasOtherLoginMethod(userId int, excludeProviderId int) (bool, error) {
+	// selectAll=true: GetUserById(id, false) omits the password column, which
+	// would make every user look passwordless and wrongly block unbinding.
+	// This value never leaves this function.
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		return false, err
+	}
+	if user.Password != "" {
+		return true, nil
+	}
+	if user.GitHubId != "" || user.DiscordId != "" || user.OidcId != "" ||
+		user.WeChatId != "" || user.TelegramId != "" || user.LinuxDOId != "" {
+		return true, nil
+	}
+
+	bindings, err := model.GetUserOAuthBindingsByUserId(userId)
+	if err != nil {
+		return false, err
+	}
+	for _, binding := range bindings {
+		if binding.ProviderId != excludeProviderId {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // UnbindCustomOAuth unbinds a custom OAuth provider from the current user
 func UnbindCustomOAuth(c *gin.Context) {
 	userId := c.GetInt("id")
@@ -531,6 +579,16 @@ func UnbindCustomOAuth(c *gin.Context) {
 	providerId, err := strconv.Atoi(providerIdStr)
 	if err != nil {
 		common.ApiErrorMsg(c, "无效的提供商 ID")
+		return
+	}
+
+	hasOther, err := hasOtherLoginMethod(userId, providerId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !hasOther {
+		common.ApiErrorI18n(c, i18n.MsgCustomOAuthUnbindSoleMethod)
 		return
 	}
 
@@ -569,6 +627,16 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 	providerId, err := strconv.Atoi(providerIdStr)
 	if err != nil {
 		common.ApiErrorMsg(c, "invalid provider id")
+		return
+	}
+
+	hasOther, err := hasOtherLoginMethod(userId, providerId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !hasOther {
+		common.ApiErrorI18n(c, i18n.MsgCustomOAuthUnbindSoleMethod)
 		return
 	}
 
