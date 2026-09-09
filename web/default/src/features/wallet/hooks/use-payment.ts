@@ -102,7 +102,16 @@ export function usePayment() {
         // Handle Stripe payment
         if (isStripe && response.data?.pay_link) {
           window.open(response.data.pay_link as string, '_blank')
-          toast.success(i18next.t('Redirecting to payment page...'))
+          toast.info(
+            response.data.trade_no
+              ? i18next.t(
+                  'Payment window opened. Order {{tradeNo}} will be credited after Stripe webhook confirmation.',
+                  { tradeNo: response.data.trade_no }
+                )
+              : i18next.t(
+                  'Payment window opened. Balance will be credited after Stripe webhook confirmation.'
+                )
+          )
           return true
         }
 

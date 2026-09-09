@@ -12,16 +12,27 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Amount          int64   `json:"amount"`
-	Money           float64 `json:"money"`
-	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	CreateTime      int64   `json:"create_time"`
-	CompleteTime    int64   `json:"complete_time"`
-	Status          string  `json:"status"`
+	Id                      int     `json:"id"`
+	UserId                  int     `json:"user_id" gorm:"index"`
+	Amount                  int64   `json:"amount"`
+	Money                   float64 `json:"money"`
+	TradeNo                 string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod           string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider         string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	Currency                string  `json:"currency" gorm:"type:varchar(8);default:'';index"`
+	ExpectedAmountMinor     int64   `json:"expected_amount_minor" gorm:"default:0"`
+	PaidAmountMinor         int64   `json:"paid_amount_minor" gorm:"default:0"`
+	ExpectedQuota           int     `json:"expected_quota" gorm:"default:0"`
+	StripeSessionId         *string `json:"stripe_session_id,omitempty" gorm:"type:varchar(191);uniqueIndex"`
+	StripeRecoverySessionId *string `json:"-" gorm:"type:varchar(191);index"`
+	StripePaymentIntentId   *string `json:"stripe_payment_intent_id,omitempty" gorm:"type:varchar(191);index"`
+	StripeEventId           *string `json:"stripe_event_id,omitempty" gorm:"type:varchar(191);uniqueIndex"`
+	StripeLivemode          *bool   `json:"stripe_livemode,omitempty"`
+	ProviderPayloadDigest   *string `json:"provider_payload_digest,omitempty" gorm:"type:varchar(128)"`
+	PaymentError            *string `json:"payment_error,omitempty" gorm:"type:varchar(255)"`
+	CreateTime              int64   `json:"create_time"`
+	CompleteTime            int64   `json:"complete_time"`
+	Status                  string  `json:"status"`
 }
 
 const (
@@ -42,10 +53,29 @@ const (
 )
 
 var (
-	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
-	ErrTopUpNotFound         = errors.New("topup not found")
-	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
+	ErrPaymentMethodMismatch  = errors.New("payment method mismatch")
+	ErrTopUpNotFound          = errors.New("topup not found")
+	ErrTopUpStatusInvalid     = errors.New("topup status invalid")
+	ErrStripeTopUpMismatch    = errors.New("stripe topup mismatch")
+	ErrStripeEventReplayed    = errors.New("stripe event replayed")
+	ErrStripeTopUpUnbound     = errors.New("stripe topup missing session binding")
+	ErrStripeTopUpBadAmount   = errors.New("stripe topup amount mismatch")
+	ErrStripeTopUpBadCurrency = errors.New("stripe topup currency mismatch")
+	ErrStripeTopUpBadMode     = errors.New("stripe topup livemode mismatch")
 )
+
+type StripeTopUpCompletion struct {
+	TradeNo               string
+	SessionID             string
+	PaymentIntentID       string
+	EventID               string
+	Livemode              bool
+	Currency              string
+	PaidAmountMinor       int64
+	CustomerID            string
+	CallerIP              string
+	ProviderPayloadDigest string
+}
 
 func (topUp *TopUp) Insert() error {
 	var err error
@@ -104,6 +134,231 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 		topUp.Status = targetStatus
 		return tx.Save(topUp).Error
 	})
+}
+
+func AttachStripeSessionToTopUp(tradeNo string, sessionID string) error {
+	if tradeNo == "" || sessionID == "" {
+		return errors.New("missing stripe order binding")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		topUp := &TopUp{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(tradeNoColumn()+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderStripe {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+		if topUp.StripeSessionId != nil && *topUp.StripeSessionId != sessionID {
+			return ErrStripeTopUpMismatch
+		}
+		topUp.StripeSessionId = stringPtr(sessionID)
+		topUp.StripeRecoverySessionId = nil
+		topUp.PaymentError = nil
+		return tx.Save(topUp).Error
+	})
+}
+
+func RecordStripeSessionRecovery(tradeNo string, sessionID string, reason string) error {
+	if tradeNo == "" || sessionID == "" {
+		return errors.New("missing stripe recovery binding")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		topUp := &TopUp{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(tradeNoColumn()+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderStripe {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.StripeSessionId != nil && *topUp.StripeSessionId != "" && *topUp.StripeSessionId != sessionID {
+			return ErrStripeTopUpMismatch
+		}
+		topUp.StripeRecoverySessionId = stringPtr(sessionID)
+		if reason != "" {
+			topUp.PaymentError = stringPtr(truncateString(reason, 255))
+		}
+		return tx.Save(topUp).Error
+	})
+}
+
+func MarkStripeTopUpFailed(tradeNo string, sessionID string, eventID string, livemode bool, targetStatus string, reason string) error {
+	if tradeNo == "" {
+		return errors.New("missing stripe order id")
+	}
+	if targetStatus == "" {
+		targetStatus = common.TopUpStatusFailed
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		topUp := &TopUp{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(tradeNoColumn()+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderStripe {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.Status == common.TopUpStatusSuccess {
+			return nil
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+		if sessionID != "" {
+			if topUp.StripeSessionId != nil && *topUp.StripeSessionId != "" && *topUp.StripeSessionId != sessionID {
+				return ErrStripeTopUpMismatch
+			}
+			if topUp.StripeSessionId == nil || *topUp.StripeSessionId == "" {
+				topUp.StripeRecoverySessionId = stringPtr(sessionID)
+			}
+		}
+		if topUp.StripeLivemode == nil || *topUp.StripeLivemode != livemode {
+			return ErrStripeTopUpBadMode
+		}
+		if eventID != "" {
+			topUp.StripeEventId = stringPtr(eventID)
+		}
+		if reason != "" {
+			topUp.PaymentError = stringPtr(truncateString(reason, 255))
+		}
+		topUp.Status = targetStatus
+		topUp.CompleteTime = common.GetTimestamp()
+		return tx.Save(topUp).Error
+	})
+}
+
+func CompleteStripeTopUp(params StripeTopUpCompletion) error {
+	if params.TradeNo == "" || params.SessionID == "" || params.EventID == "" {
+		return errors.New("missing stripe completion identifiers")
+	}
+	var quotaToAdd int
+	var topUpUserID int
+	var topUpAmount int64
+	var topUpMoney float64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if params.EventID != "" {
+			var existing TopUp
+			err := tx.Where("stripe_event_id = ? AND trade_no <> ?", params.EventID, params.TradeNo).First(&existing).Error
+			if err == nil {
+				return ErrStripeEventReplayed
+			}
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		topUp := &TopUp{}
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(tradeNoColumn()+" = ?", params.TradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderStripe {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.Status == common.TopUpStatusSuccess {
+			return nil
+		}
+		if topUp.Status != common.TopUpStatusPending &&
+			topUp.Status != common.TopUpStatusFailed &&
+			topUp.Status != common.TopUpStatusExpired {
+			return ErrTopUpStatusInvalid
+		}
+		if topUp.StripeSessionId != nil && *topUp.StripeSessionId != "" && *topUp.StripeSessionId != params.SessionID {
+			return ErrStripeTopUpMismatch
+		}
+		if topUp.StripeSessionId == nil || *topUp.StripeSessionId == "" {
+			if topUp.StripeRecoverySessionId != nil && *topUp.StripeRecoverySessionId != "" && *topUp.StripeRecoverySessionId != params.SessionID {
+				return ErrStripeTopUpMismatch
+			}
+			topUp.StripeSessionId = stringPtr(params.SessionID)
+			topUp.StripeRecoverySessionId = nil
+		}
+		if topUp.StripeLivemode == nil || *topUp.StripeLivemode != params.Livemode {
+			return ErrStripeTopUpBadMode
+		}
+		if topUp.Currency != "USD" || params.Currency != "USD" {
+			return ErrStripeTopUpBadCurrency
+		}
+		if topUp.ExpectedAmountMinor <= 0 || topUp.ExpectedAmountMinor != params.PaidAmountMinor {
+			return ErrStripeTopUpBadAmount
+		}
+
+		quotaToAdd = topUp.ExpectedQuota
+		if quotaToAdd <= 0 {
+			quotaToAdd = int(decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart())
+		}
+		if quotaToAdd <= 0 {
+			return errors.New("invalid topup quota")
+		}
+
+		topUp.PaidAmountMinor = params.PaidAmountMinor
+		topUp.StripePaymentIntentId = nullableString(params.PaymentIntentID)
+		topUp.StripeEventId = stringPtr(params.EventID)
+		topUp.ProviderPayloadDigest = nullableString(params.ProviderPayloadDigest)
+		topUp.PaymentError = nil
+		topUp.CompleteTime = common.GetTimestamp()
+		topUp.Status = common.TopUpStatusSuccess
+		if err := tx.Save(topUp).Error; err != nil {
+			return err
+		}
+
+		updates := map[string]interface{}{"quota": gorm.Expr("quota + ?", quotaToAdd)}
+		if params.CustomerID != "" {
+			updates["stripe_customer"] = params.CustomerID
+		}
+		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(updates).Error; err != nil {
+			return err
+		}
+		topUpUserID = topUp.UserId
+		topUpAmount = topUp.Amount
+		topUpMoney = topUp.Money
+		return nil
+	})
+	if err != nil {
+		common.SysError("stripe topup failed: " + err.Error())
+		return err
+	}
+	if quotaToAdd > 0 {
+		RecordTopupLog(topUpUserID, fmt.Sprintf("Stripe topup succeeded, credited %v, requested amount: %d, credit amount USD: %.2f", logger.FormatQuota(quotaToAdd), topUpAmount, topUpMoney), params.CallerIP, PaymentMethodStripe, PaymentProviderStripe)
+	}
+	return nil
+}
+
+func tradeNoColumn() string {
+	if common.UsingPostgreSQL {
+		return `"trade_no"`
+	}
+	return "`trade_no`"
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func IsPermanentStripeTopUpError(err error) bool {
+	return errors.Is(err, ErrPaymentMethodMismatch) ||
+		errors.Is(err, ErrTopUpNotFound) ||
+		errors.Is(err, ErrTopUpStatusInvalid) ||
+		errors.Is(err, ErrStripeTopUpMismatch) ||
+		errors.Is(err, ErrStripeEventReplayed) ||
+		errors.Is(err, ErrStripeTopUpUnbound) ||
+		errors.Is(err, ErrStripeTopUpBadAmount) ||
+		errors.Is(err, ErrStripeTopUpBadCurrency) ||
+		errors.Is(err, ErrStripeTopUpBadMode)
+}
+
+func truncateString(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
 }
 
 func Recharge(referenceId string, customerId string, callerIp string) (err error) {
@@ -342,6 +597,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		// 幂等处理：已成功直接返回
 		if topUp.Status == common.TopUpStatusSuccess {
 			return nil
+		}
+		if topUp.PaymentProvider == PaymentProviderStripe {
+			return errors.New("Stripe 订单必须通过 Stripe webhook 或专用 Stripe 凭证核验补单")
 		}
 
 		if topUp.Status != common.TopUpStatusPending {

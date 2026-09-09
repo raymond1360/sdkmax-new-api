@@ -3,6 +3,7 @@ package controller
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
@@ -23,24 +24,43 @@ func confirmPaymentComplianceForTest(t *testing.T) {
 
 func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
+	model.SetStripeTopUpSchemaReadinessForTest(true, "ready")
 	originalAPISecret := setting.StripeApiSecret
 	originalWebhookSecret := setting.StripeWebhookSecret
-	originalPriceID := setting.StripePriceId
+	originalMode := setting.StripeMode
+	originalUnitPrice := setting.StripeUnitPrice
 	t.Cleanup(func() {
 		setting.StripeApiSecret = originalAPISecret
 		setting.StripeWebhookSecret = originalWebhookSecret
-		setting.StripePriceId = originalPriceID
+		setting.StripeMode = originalMode
+		setting.StripeUnitPrice = originalUnitPrice
+		model.SetStripeTopUpSchemaReadinessForTest(false, "not checked")
 	})
 
+	setting.StripeMode = "test"
+	setting.StripeUnitPrice = 1
 	setting.StripeWebhookSecret = ""
 	setting.StripeApiSecret = "sk_test_123"
-	setting.StripePriceId = "price_123"
 	require.False(t, isStripeWebhookEnabled())
 
 	setting.StripeWebhookSecret = "whsec_test"
 	require.True(t, isStripeWebhookEnabled())
 
-	setting.StripePriceId = ""
+	setting.StripeWebhookSecret = "not_whsec"
+	require.False(t, isStripeWebhookEnabled())
+
+	setting.StripeWebhookSecret = "whsec_test"
+	setting.StripeMode = "live"
+	require.False(t, isStripeWebhookEnabled())
+
+	setting.StripeApiSecret = "sk_live_123"
+	require.True(t, isStripeWebhookEnabled())
+
+	setting.StripeUnitPrice = 0
+	require.False(t, isStripeWebhookEnabled())
+
+	setting.StripeUnitPrice = 1
+	model.SetStripeTopUpSchemaReadinessForTest(false, "missing columns: stripe_session_id")
 	require.False(t, isStripeWebhookEnabled())
 }
 

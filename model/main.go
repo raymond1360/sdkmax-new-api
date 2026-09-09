@@ -196,6 +196,7 @@ func InitDB() (err error) {
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
 		if !common.IsMasterNode {
+			_ = CheckStripeTopUpSchemaReadiness(DB)
 			return nil
 		}
 		if common.UsingMySQL {
@@ -254,6 +255,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := ensureTopUpTableForMigration(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -265,7 +269,6 @@ func migrateDB() error {
 		&Ability{},
 		&Log{},
 		&Midjourney{},
-		&TopUp{},
 		&QuotaData{},
 		&Task{},
 		&Model{},
@@ -313,6 +316,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := ensureTopUpTableForMigration(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -329,7 +335,6 @@ func migrateDBFast() error {
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
-		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},

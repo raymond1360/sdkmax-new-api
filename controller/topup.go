@@ -114,6 +114,10 @@ func GetTopUpInfo(c *gin.Context) {
 		"pay_methods":             payMethods,
 		"min_topup":               operation_setting.MinTopUp,
 		"stripe_min_topup":        setting.StripeMinTopUp,
+		"stripe_currency":         "USD",
+		"stripe_mode":             normalizedStripeMode(),
+		"stripe_schema_ready":     model.IsStripeTopUpSchemaReady(),
+		"stripe_schema_message":   model.StripeTopUpSchemaReadinessInfo(),
 		"waffo_min_topup":         setting.WaffoMinTopUp,
 		"waffo_pancake_min_topup": setting.WaffoPancakeMinTopUp,
 		"amount_options":          operation_setting.GetPaymentSetting().AmountOptions,
@@ -458,6 +462,7 @@ func GetUserTopUps(c *gin.Context) {
 	}
 
 	pageInfo.SetTotal(int(total))
+	sanitizeTopUpsForResponse(topups)
 	pageInfo.SetItems(topups)
 	common.ApiSuccess(c, pageInfo)
 }
@@ -483,8 +488,30 @@ func GetAllTopUps(c *gin.Context) {
 	}
 
 	pageInfo.SetTotal(int(total))
+	sanitizeTopUpsForResponse(topups)
 	pageInfo.SetItems(topups)
 	common.ApiSuccess(c, pageInfo)
+}
+
+func sanitizeTopUpsForResponse(topups []*model.TopUp) {
+	for _, topUp := range topups {
+		if topUp == nil {
+			continue
+		}
+		topUp.StripeSessionId = maskedStringPtr(topUp.StripeSessionId)
+		topUp.StripePaymentIntentId = maskedStringPtr(topUp.StripePaymentIntentId)
+		topUp.StripeEventId = maskedStringPtr(topUp.StripeEventId)
+		topUp.ProviderPayloadDigest = nil
+		topUp.PaymentError = nil
+	}
+}
+
+func maskedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	masked := maskStripeID(*value)
+	return &masked
 }
 
 type AdminCompleteTopupRequest struct {

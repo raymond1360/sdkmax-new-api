@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -15,9 +17,7 @@ func isStripeTopUpEnabled() bool {
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
-	return strings.TrimSpace(setting.StripeApiSecret) != "" &&
-		strings.TrimSpace(setting.StripeWebhookSecret) != "" &&
-		strings.TrimSpace(setting.StripePriceId) != ""
+	return validateStripeRuntimeConfig(true) == nil
 }
 
 func isStripeWebhookConfigured() bool {
@@ -26,6 +26,52 @@ func isStripeWebhookConfigured() bool {
 
 func isStripeWebhookEnabled() bool {
 	return isStripeTopUpEnabled()
+}
+
+func normalizedStripeMode() string {
+	mode := strings.ToLower(strings.TrimSpace(setting.StripeMode))
+	if mode != "live" {
+		return "test"
+	}
+	return "live"
+}
+
+func expectedStripeLivemode() bool {
+	return normalizedStripeMode() == "live"
+}
+
+func validateStripeRuntimeConfig(requireWebhookSecret bool) error {
+	key := strings.TrimSpace(setting.StripeApiSecret)
+	if key == "" {
+		return fmt.Errorf("stripe api key is not configured")
+	}
+	mode := normalizedStripeMode()
+	switch mode {
+	case "test":
+		if !strings.HasPrefix(key, "sk_test_") {
+			return fmt.Errorf("stripe test mode requires sk_test key")
+		}
+	case "live":
+		if !strings.HasPrefix(key, "sk_live_") {
+			return fmt.Errorf("stripe live mode requires sk_live key")
+		}
+	}
+	if requireWebhookSecret {
+		webhookSecret := strings.TrimSpace(setting.StripeWebhookSecret)
+		if webhookSecret == "" {
+			return fmt.Errorf("stripe webhook secret is not configured")
+		}
+		if !strings.HasPrefix(webhookSecret, "whsec_") {
+			return fmt.Errorf("stripe webhook secret must start with whsec_")
+		}
+	}
+	if setting.StripeUnitPrice <= 0 {
+		return fmt.Errorf("stripe unit price must be positive")
+	}
+	if !model.IsStripeTopUpSchemaReady() {
+		return fmt.Errorf("stripe database migration is not ready: %s", model.StripeTopUpSchemaReadinessInfo())
+	}
+	return nil
 }
 
 func isCreemTopUpEnabled() bool {

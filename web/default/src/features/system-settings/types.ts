@@ -234,9 +234,13 @@ export type BillingSettings = {
   StripeApiSecret: string
   StripeWebhookSecret: string
   StripePriceId: string
+  StripeMode: 'test' | 'live'
+  StripeCurrency: string
   StripeUnitPrice: number
   StripeMinTopUp: number
   StripePromotionCodesEnabled: boolean
+  StripeTopUpSchemaReady: boolean
+  StripeTopUpSchemaReadinessInfo: string
   CreemApiKey: string
   CreemWebhookSecret: string
   CreemTestMode: boolean

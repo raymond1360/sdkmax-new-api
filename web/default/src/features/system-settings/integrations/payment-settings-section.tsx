@@ -127,6 +127,8 @@ const paymentSchema = z.object({
   StripeApiSecret: z.string(),
   StripeWebhookSecret: z.string(),
   StripePriceId: z.string(),
+  StripeMode: z.enum(['test', 'live']),
+  StripeCurrency: z.string(),
   StripeUnitPrice: z.coerce.number().min(0),
   StripeMinTopUp: z.coerce.number().min(0),
   StripePromotionCodesEnabled: z.boolean(),
@@ -184,6 +186,8 @@ type PaymentSettingsSectionProps = {
   waffoPancakeProvisionedStoreID?: string
   waffoPancakeProvisionedProductID?: string
   complianceDefaults: PaymentComplianceDefaults
+  stripeSchemaReady?: boolean
+  stripeSchemaReadinessInfo?: string
 }
 
 function parseWaffoPayMethods(value: string): PayMethod[] {
@@ -202,6 +206,8 @@ export function PaymentSettingsSection({
   waffoPancakeProvisionedStoreID,
   waffoPancakeProvisionedProductID,
   complianceDefaults,
+  stripeSchemaReady = false,
+  stripeSchemaReadinessInfo = '',
 }: PaymentSettingsSectionProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -412,9 +418,11 @@ export function PaymentSettingsSection({
       StripeApiSecret: values.StripeApiSecret.trim(),
       StripeWebhookSecret: values.StripeWebhookSecret.trim(),
       StripePriceId: values.StripePriceId.trim(),
+      StripeMode: values.StripeMode,
+      StripeCurrency: 'USD',
       StripeUnitPrice: values.StripeUnitPrice,
       StripeMinTopUp: values.StripeMinTopUp,
-      StripePromotionCodesEnabled: values.StripePromotionCodesEnabled,
+      StripePromotionCodesEnabled: false,
       CreemApiKey: values.CreemApiKey.trim(),
       CreemWebhookSecret: values.CreemWebhookSecret.trim(),
       CreemTestMode: values.CreemTestMode,
@@ -456,6 +464,8 @@ export function PaymentSettingsSection({
       StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
       StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
       StripePriceId: initialRef.current.StripePriceId.trim(),
+      StripeMode: initialRef.current.StripeMode,
+      StripeCurrency: 'USD',
       StripeUnitPrice: initialRef.current.StripeUnitPrice,
       StripeMinTopUp: initialRef.current.StripeMinTopUp,
       StripePromotionCodesEnabled:
@@ -486,6 +496,16 @@ export function PaymentSettingsSection({
       WaffoPancakeReturnURL: removeTrailingSlash(
         initialRef.current.WaffoPancakeReturnURL.trim()
       ),
+    }
+
+    if (
+      sanitized.StripeMode !== initial.StripeMode &&
+      !sanitized.StripeWebhookSecret
+    ) {
+      toast.error(
+        t('Enter the matching Stripe webhook secret when switching mode.')
+      )
+      return
     }
 
     const updates: Array<{ key: string; value: string | number | boolean }> = []
@@ -563,6 +583,14 @@ export function PaymentSettingsSection({
 
     if (sanitized.StripePriceId !== initial.StripePriceId) {
       updates.push({ key: 'StripePriceId', value: sanitized.StripePriceId })
+    }
+
+    if (sanitized.StripeMode !== initial.StripeMode) {
+      updates.push({ key: 'StripeMode', value: sanitized.StripeMode })
+    }
+
+    if (sanitized.StripeCurrency !== initial.StripeCurrency) {
+      updates.push({ key: 'StripeCurrency', value: sanitized.StripeCurrency })
     }
 
     if (sanitized.StripeUnitPrice !== initial.StripeUnitPrice) {
@@ -1191,9 +1219,35 @@ export function PaymentSettingsSection({
               </p>
             </div>
 
+            {!stripeSchemaReady && (
+              <Alert
+                variant='destructive'
+                className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'
+              >
+                <ShieldAlert className='h-4 w-4' />
+                <AlertTitle>{t('Stripe数据库迁移未完成')}</AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'Stripe one-time top-up stays disabled until the explicit top_ups migration SQL has been applied and verified.'
+                  )}
+                  {stripeSchemaReadinessInfo && (
+                    <span className='mt-1 block break-words font-mono text-xs'>
+                      {stripeSchemaReadinessInfo}
+                    </span>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
             <div className='rounded-md bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100'>
               <p className='mb-2 font-medium'>{t('Webhook Configuration:')}</p>
               <ul className='list-inside list-disc space-y-1'>
+                <li>
+                  {t('Production webhook URL:')}{' '}
+                  <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
+                    {'https://api.sdkmax.com/api/stripe/webhook'}
+                  </code>
+                </li>
                 <li>
                   {t('Webhook URL:')}{' '}
                   <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
@@ -1209,6 +1263,11 @@ export function PaymentSettingsSection({
                   <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
                     {t('checkout.session.expired')}
                   </code>
+                </li>
+                <li>
+                  {t(
+                    'One-time top-up only: dynamic USD PriceData, card payments, no promotion codes.'
+                  )}
                 </li>
                 <li>
                   {t('Configure at:')}{' '}
@@ -1227,6 +1286,38 @@ export function PaymentSettingsSection({
             <div className='grid gap-6 md:grid-cols-3'>
               <FormField
                 control={form.control}
+                name='StripeMode'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Mode')}</FormLabel>
+                    <FormControl>
+                      <div className='grid grid-cols-2 gap-2'>
+                        {(['test', 'live'] as const).map((mode) => (
+                          <Button
+                            key={mode}
+                            type='button'
+                            variant={
+                              field.value === mode ? 'default' : 'outline'
+                            }
+                            onClick={() => field.onChange(mode)}
+                          >
+                            {mode === 'test' ? t('Test') : t('Live')}
+                          </Button>
+                        ))}
+                      </div>
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Test requires sk_test_; live requires sk_live_ and the matching webhook secret.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
                 name='StripeApiSecret'
                 render={({ field }) => (
                   <FormItem>
@@ -1234,7 +1325,7 @@ export function PaymentSettingsSection({
                     <FormControl>
                       <Input
                         type='password'
-                        placeholder={t('sk_xxx or rk_xxx')}
+                        placeholder={t('sk_test_xxx or sk_live_xxx')}
                         autoComplete='new-password'
                         {...field}
                         onChange={(event) => field.onChange(event.target.value)}
@@ -1278,7 +1369,7 @@ export function PaymentSettingsSection({
                 name='StripePriceId'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Price ID')}</FormLabel>
+                    <FormLabel>{t('Legacy Price ID')}</FormLabel>
                     <FormControl>
                       <Input
                         placeholder={t('price_xxx')}
@@ -1287,7 +1378,9 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Stripe product price ID')}
+                      {t(
+                        'Compatibility field for subscription or legacy flows; one-time top-up does not use it.'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1298,12 +1391,32 @@ export function PaymentSettingsSection({
             <div className='grid gap-6 md:grid-cols-3'>
               <FormField
                 control={form.control}
+                name='StripeCurrency'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Checkout currency')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        value='USD'
+                        readOnly
+                        onChange={() => field.onChange('USD')}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Fixed to USD for Stripe one-time top-up')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
                 name='StripeUnitPrice'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>
-                      {t('Unit price (local currency / USD)')}
-                    </FormLabel>
+                    <FormLabel>{t('USD settlement multiplier')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
@@ -1313,7 +1426,9 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('e.g., 8 means 8 local currency per USD')}
+                      {t(
+                        'Base rule: 1 means 1.00 USD charged for each 1.00 USD-equivalent SDKMAX credit unit. Discounts are marketing subsidies that reduce Stripe payment only; without discounts, settlement is strict 1:1.'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1342,26 +1457,6 @@ export function PaymentSettingsSection({
                 )}
               />
 
-              <FormField
-                control={form.control}
-                name='StripePromotionCodesEnabled'
-                render={({ field }) => (
-                  <SettingsSwitchItem>
-                    <SettingsSwitchContent>
-                      <FormLabel>{t('Promotion codes')}</FormLabel>
-                      <FormDescription>
-                        {t('Allow users to enter promo codes')}
-                      </FormDescription>
-                    </SettingsSwitchContent>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </SettingsSwitchItem>
-                )}
-              />
             </div>
           </div>
 

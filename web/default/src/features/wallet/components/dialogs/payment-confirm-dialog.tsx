@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DEFAULT_DISCOUNT_RATE } from '../../constants'
-import { formatCurrency, getPaymentIcon } from '../../lib'
+import { formatCurrency, getPaymentIcon, isStripePayment } from '../../lib'
 import type { PaymentMethod } from '../../types'
 
 interface PaymentConfirmDialogProps {
@@ -63,6 +63,8 @@ export function PaymentConfirmDialog({
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
+  const isStripe = isStripePayment(paymentMethod?.type ?? '')
+  const paymentCurrencyLabel = isStripe ? 'USD' : ''
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -79,7 +81,7 @@ export function PaymentConfirmDialog({
         <div className='space-y-3 py-3 sm:space-y-4 sm:py-4'>
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-sm'>
-              {t('Topup Amount')}
+              {t('SDKMAX Credit')}
             </span>
             <span className='text-lg font-semibold'>
               {formatLocalCurrencyAmount(topupAmount * usdExchangeRate, {
@@ -100,6 +102,11 @@ export function PaymentConfirmDialog({
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
                   {formatCurrency(paymentAmount)}
+                  {paymentCurrencyLabel && (
+                    <span className='text-muted-foreground ml-1 text-sm'>
+                      {paymentCurrencyLabel}
+                    </span>
+                  )}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>

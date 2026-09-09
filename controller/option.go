@@ -105,6 +105,22 @@ func GetOptions(c *gin.Context) {
 		Key:   "CompletionRatioMeta",
 		Value: buildCompletionRatioMetaValue(optionValues),
 	})
+	options = append(options, &model.Option{
+		Key:   "StripeApiSecretConfigured",
+		Value: strconv.FormatBool(strings.TrimSpace(setting.StripeApiSecret) != ""),
+	})
+	options = append(options, &model.Option{
+		Key:   "StripeWebhookSecretConfigured",
+		Value: strconv.FormatBool(strings.TrimSpace(setting.StripeWebhookSecret) != ""),
+	})
+	options = append(options, &model.Option{
+		Key:   "StripeTopUpSchemaReady",
+		Value: strconv.FormatBool(model.IsStripeTopUpSchemaReady()),
+	})
+	options = append(options, &model.Option{
+		Key:   "StripeTopUpSchemaReadinessInfo",
+		Value: model.StripeTopUpSchemaReadinessInfo(),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -150,6 +166,14 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "StripeApiSecret", "StripeWebhookSecret":
+		if strings.TrimSpace(option.Value.(string)) == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"message": "",
+			})
+			return
+		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{

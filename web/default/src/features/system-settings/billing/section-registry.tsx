@@ -144,6 +144,8 @@ const BILLING_SECTIONS = [
           StripeApiSecret: settings.StripeApiSecret,
           StripeWebhookSecret: settings.StripeWebhookSecret,
           StripePriceId: settings.StripePriceId,
+          StripeMode: settings.StripeMode ?? 'test',
+          StripeCurrency: settings.StripeCurrency ?? 'USD',
           StripeUnitPrice: settings.StripeUnitPrice,
           StripeMinTopUp: settings.StripeMinTopUp,
           StripePromotionCodesEnabled: settings.StripePromotionCodesEnabled,
@@ -176,6 +178,10 @@ const BILLING_SECTIONS = [
         }}
         waffoPancakeProvisionedStoreID={settings.WaffoPancakeStoreID ?? ''}
         waffoPancakeProvisionedProductID={settings.WaffoPancakeProductID ?? ''}
+        stripeSchemaReady={settings.StripeTopUpSchemaReady ?? false}
+        stripeSchemaReadinessInfo={
+          settings.StripeTopUpSchemaReadinessInfo ?? ''
+        }
         complianceDefaults={{
           confirmed: settings['payment_setting.compliance_confirmed'] ?? false,
           termsVersion:

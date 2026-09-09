@@ -38,7 +38,11 @@ export type AmountResponse = ApiResponse<string>
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
 }
-export type StripePaymentResponse = ApiResponse<{ pay_link: string }>
+export type StripePaymentResponse = ApiResponse<{
+  pay_link: string
+  trade_no?: string
+  status?: TopupStatus
+}>
 export type AffiliateCodeResponse = ApiResponse<string>
 export type AffiliateTransferResponse = ApiResponse
 export type CreemPaymentResponse = ApiResponse<{ checkout_url: string }>
@@ -130,6 +134,14 @@ export interface TopupInfo {
   min_topup: number
   /** Minimum topup amount for Stripe */
   stripe_min_topup: number
+  /** Fixed Stripe checkout currency */
+  stripe_currency?: 'USD'
+  /** Stripe mode configured on the backend */
+  stripe_mode?: 'test' | 'live'
+  /** Whether Stripe top-up schema migration is ready */
+  stripe_schema_ready?: boolean
+  /** Read-only Stripe top-up schema readiness message */
+  stripe_schema_message?: string
   /** Preset amount options */
   amount_options: number[]
   /** Discount rates by amount */
@@ -247,7 +259,7 @@ export interface UserWalletData {
 /**
  * Topup record status
  */
-export type TopupStatus = 'success' | 'pending' | 'expired'
+export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
 
 /**
  * Topup billing record
@@ -261,6 +273,16 @@ export interface TopupRecord {
   amount: number
   /** Payment amount (actual money paid) */
   money: number
+  /** Stripe currency, fixed to USD for new Stripe topups */
+  currency?: string
+  /** Expected amount in minor units, e.g. cents */
+  expected_amount_minor?: number
+  /** Paid amount in minor units, e.g. cents */
+  paid_amount_minor?: number
+  /** Stripe Checkout Session ID, masked by UI */
+  stripe_session_id?: string | null
+  /** Stripe PaymentIntent ID, masked by UI */
+  stripe_payment_intent_id?: string | null
   /** Trade/order number */
   trade_no: string
   /** Payment method type */

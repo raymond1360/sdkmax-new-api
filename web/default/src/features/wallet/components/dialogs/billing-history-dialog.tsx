@@ -90,6 +90,17 @@ export function BillingHistoryDialog({
 
   const totalPages = Math.ceil(total / pageSize)
 
+  const maskId = (value?: string | null) => {
+    if (!value) return ''
+    if (value.length <= 10) return value
+    return `${value.slice(0, 6)}...${value.slice(-4)}`
+  }
+
+  const formatMinorAmount = (minor?: number, currency?: string) => {
+    if (!minor || !currency) return '-'
+    return `${(minor / 100).toFixed(2)} ${currency.toUpperCase()}`
+  }
+
   const handleConfirmComplete = async () => {
     if (confirmTradeNo) {
       const success = await handleCompleteOrder(confirmTradeNo)
@@ -253,13 +264,42 @@ export function BillingHistoryDialog({
                           </div>
                           <div className='space-y-1'>
                             <Label className='text-muted-foreground text-xs'>
-                              {t('Payment')}
+                              {t('Paid')}
                             </Label>
                             <div className='text-sm font-semibold text-red-600'>
-                              {formatNumber(record.money)}
+                              {record.currency
+                                ? formatMinorAmount(
+                                    record.paid_amount_minor ||
+                                      record.expected_amount_minor,
+                                    record.currency
+                                  )
+                                : formatNumber(record.money)}
                             </div>
                           </div>
                         </div>
+
+                        {(record.stripe_session_id ||
+                          record.stripe_payment_intent_id ||
+                          record.complete_time) && (
+                          <div className='text-muted-foreground mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3'>
+                            {record.complete_time ? (
+                              <div>
+                                {t('Completed')}: {formatTimestamp(record.complete_time)}
+                              </div>
+                            ) : null}
+                            {record.stripe_session_id ? (
+                              <div>
+                                {t('Session')}: {maskId(record.stripe_session_id)}
+                              </div>
+                            ) : null}
+                            {record.stripe_payment_intent_id ? (
+                              <div>
+                                {t('Payment Intent')}:{' '}
+                                {maskId(record.stripe_payment_intent_id)}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
 
                         {/* Admin Actions */}
                         {isAdmin && record.status === 'pending' && (
