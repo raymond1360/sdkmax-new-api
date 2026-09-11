@@ -1,7 +1,13 @@
 package model
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -44,6 +50,116 @@ func TestRecordStripeOrphanSessionAuditStoresFullSessionID(t *testing.T) {
 	assert.Equal(t, "cs_test_orphan_full_session_1234567890", audit.StripeSessionId)
 	assert.Equal(t, userID, audit.UserId)
 	assert.False(t, audit.Resolved)
+}
+
+func TestRecordStripeOrphanSessionFallbackFileWritesRestrictedJSONL(t *testing.T) {
+	dir := t.TempDir()
+	restore := SetStripeOrphanSessionFallbackDirForTest(dir)
+	t.Cleanup(restore)
+
+	sessionID := "cs_test_fallback_full_session_1234567890"
+	require.NoError(t, RecordStripeOrphanSessionFallbackFile(StripeOrphanSessionAuditInput{
+		UserId:            9301,
+		TradeNo:           "ref_fallback_file",
+		StripeSessionId:   sessionID,
+		FailureStage:      StripeOrphanSessionFailureStageAttachRecoveryExpire,
+		AttachErrorCode:   "attach failed Stripe-Signature secret",
+		RecoveryErrorCode: "recovery failed webhook body customer@example.com",
+		ExpireErrorCode:   "expire failed card 4242424242424242",
+	}, assert.AnError))
+
+	path := filepath.Join(dir, stripeOrphanFallbackFileName)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), sessionID)
+	assert.NotContains(t, string(data), "Stripe-Signature")
+	assert.NotContains(t, string(data), "webhook body")
+	assert.NotContains(t, string(data), "customer@example.com")
+	assert.NotContains(t, string(data), "card")
+
+	var record StripeOrphanSessionFallbackRecord
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(data))), &record))
+	assert.Equal(t, 1, record.Version)
+	assert.Equal(t, "orphan_session", record.Type)
+	assert.Equal(t, "ref_fallback_file", record.TradeNo)
+	assert.Equal(t, 9301, record.UserId)
+	assert.Equal(t, sessionID, record.StripeSessionId)
+	assert.False(t, record.Resolved)
+
+	if runtime.GOOS == "linux" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	}
+}
+
+func TestRecordStripeOrphanSessionFallbackFileConcurrentWritesValidJSONLines(t *testing.T) {
+	dir := t.TempDir()
+	restore := SetStripeOrphanSessionFallbackDirForTest(dir)
+	t.Cleanup(restore)
+
+	const writers = 16
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for idx := 0; idx < writers; idx++ {
+		idx := idx
+		go func() {
+			defer wg.Done()
+			err := RecordStripeOrphanSessionFallbackFile(StripeOrphanSessionAuditInput{
+				UserId:            9401,
+				TradeNo:           "ref_fallback_concurrent",
+				StripeSessionId:   "cs_test_fallback_concurrent_" + string(rune('a'+idx)) + "_1234567890",
+				FailureStage:      StripeOrphanSessionFailureStageAttachRecoveryExpire,
+				AttachErrorCode:   "attach failed",
+				RecoveryErrorCode: "recovery failed",
+				ExpireErrorCode:   "expire failed",
+			}, assert.AnError)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	data, err := os.ReadFile(filepath.Join(dir, stripeOrphanFallbackFileName))
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	require.Len(t, lines, writers)
+	for _, line := range lines {
+		var record StripeOrphanSessionFallbackRecord
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		assert.Equal(t, "ref_fallback_concurrent", record.TradeNo)
+		assert.Contains(t, record.StripeSessionId, "cs_test_fallback_concurrent_")
+	}
+}
+
+func TestStripeOrphanSessionFallbackDirRequiresConfirmedDataDirectory(t *testing.T) {
+	restore := SetStripeOrphanSessionFallbackDirForTest("")
+	t.Cleanup(restore)
+
+	err := RecordStripeOrphanSessionFallbackFile(StripeOrphanSessionAuditInput{
+		TradeNo:         "ref_no_data_dir",
+		StripeSessionId: "cs_test_no_data_dir_1234567890",
+	}, assert.AnError)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "persistent data directory is not confirmed")
+}
+
+func TestStripeOrphanSessionFallbackRotationStopsBeforeDroppingOldestEvidence(t *testing.T) {
+	dir := t.TempDir()
+	restore := SetStripeOrphanSessionFallbackDirForTest(dir)
+	t.Cleanup(restore)
+	path := filepath.Join(dir, stripeOrphanFallbackFileName)
+
+	require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", stripeOrphanFallbackMaxBytes)), 0600))
+	for idx := 1; idx <= stripeOrphanFallbackMaxArchives; idx++ {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, stripeOrphanFallbackFileName+"."+strconv.Itoa(idx)), []byte("existing evidence\n"), 0600))
+	}
+
+	err := RecordStripeOrphanSessionFallbackFile(StripeOrphanSessionAuditInput{
+		TradeNo:         "ref_rotation_limit",
+		StripeSessionId: "cs_test_rotation_limit_1234567890",
+	}, assert.AnError)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retention limit reached")
 }
 
 func TestRecordStripeOrphanSessionAuditDeduplicatesUnresolvedPath(t *testing.T) {

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -386,7 +388,7 @@ func TestBindStripeSessionWithRecoveryRetriesThenSucceeds(t *testing.T) {
 		return nil
 	}
 
-	require.NoError(t, bindStripeSessionWithRecovery(context.Background(), "ref_retry", "cs_test_retry", false))
+	require.NoError(t, bindStripeSessionWithRecovery(context.Background(), 0, "ref_retry", "cs_test_retry", false))
 	assert.Equal(t, stripeBindRetryAttempts, attempts)
 }
 
@@ -426,7 +428,7 @@ func TestBindStripeSessionWithRecoveryExpiresOnlyAfterConfirmedExpire(t *testing
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_expire", "cs_test_expire", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_expire", "cs_test_expire", false)
 	require.Error(t, err)
 	assert.Equal(t, "cs_test_expire", recoverySessionID)
 	assert.Equal(t, "cs_test_expire", markedSessionID)
@@ -466,7 +468,7 @@ func TestBindStripeSessionWithRecoveryKeepsRecoverableWhenExpireFails(t *testing
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_recover", "cs_test_recover", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_recover", "cs_test_recover", false)
 	require.Error(t, err)
 	assert.Equal(t, "cs_test_recover", recoverySessionID)
 }
@@ -478,12 +480,14 @@ func TestBindStripeSessionWithRecoveryCreatesOrphanAuditOnTripleFailure(t *testi
 	originalExpire := expireStripeCheckoutSession
 	originalMark := markStripeTopUpFailed
 	originalAudit := recordStripeOrphanSessionAudit
+	originalFallback := recordStripeOrphanSessionFallbackFile
 	t.Cleanup(func() {
 		attachStripeSessionToTopUp = originalAttach
 		recordStripeSessionRecovery = originalRecord
 		expireStripeCheckoutSession = originalExpire
 		markStripeTopUpFailed = originalMark
 		recordStripeOrphanSessionAudit = originalAudit
+		recordStripeOrphanSessionFallbackFile = originalFallback
 	})
 
 	livemode := false
@@ -519,13 +523,20 @@ func TestBindStripeSessionWithRecoveryCreatesOrphanAuditOnTripleFailure(t *testi
 	}
 	recordStripeOrphanSessionAudit = model.RecordStripeOrphanSessionAudit
 
-	err := bindStripeSessionWithRecovery(context.Background(), topUp.TradeNo, "cs_test_triple_failure_audit_1234567890", false)
+	fallbackDir := t.TempDir()
+	restoreFallback := model.SetStripeOrphanSessionFallbackDirForTest(fallbackDir)
+	t.Cleanup(restoreFallback)
+	recordStripeOrphanSessionFallbackFile = model.RecordStripeOrphanSessionFallbackFile
+
+	err := bindStripeSessionWithRecovery(context.Background(), topUp.UserId, topUp.TradeNo, "cs_test_triple_failure_audit_1234567890", false)
 	require.Error(t, err)
 
 	var audit model.StripeOrphanSessionAudit
 	require.NoError(t, model.DB.Where("trade_no = ?", topUp.TradeNo).First(&audit).Error)
 	assert.Equal(t, "cs_test_triple_failure_audit_1234567890", audit.StripeSessionId)
 	assert.Equal(t, model.StripeOrphanSessionFailureStageAttachRecoveryExpire, audit.FailureStage)
+	_, fallbackErr := os.Stat(filepath.Join(fallbackDir, "stripe_orphan_session_fallback.jsonl"))
+	assert.True(t, os.IsNotExist(fallbackErr))
 }
 
 func TestBindStripeSessionWithRecoveryAuditWriteFailureDoesNotChangeOrderState(t *testing.T) {
@@ -535,12 +546,14 @@ func TestBindStripeSessionWithRecoveryAuditWriteFailureDoesNotChangeOrderState(t
 	originalExpire := expireStripeCheckoutSession
 	originalMark := markStripeTopUpFailed
 	originalAudit := recordStripeOrphanSessionAudit
+	originalFallback := recordStripeOrphanSessionFallbackFile
 	t.Cleanup(func() {
 		attachStripeSessionToTopUp = originalAttach
 		recordStripeSessionRecovery = originalRecord
 		expireStripeCheckoutSession = originalExpire
 		markStripeTopUpFailed = originalMark
 		recordStripeOrphanSessionAudit = originalAudit
+		recordStripeOrphanSessionFallbackFile = originalFallback
 	})
 
 	livemode := false
@@ -577,7 +590,11 @@ func TestBindStripeSessionWithRecoveryAuditWriteFailureDoesNotChangeOrderState(t
 		return errors.New("audit table unavailable")
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), topUp.TradeNo, "cs_test_orphan_audit_write_fail", false)
+	restoreFallback := model.SetStripeOrphanSessionFallbackDirForTest(t.TempDir())
+	t.Cleanup(restoreFallback)
+	recordStripeOrphanSessionFallbackFile = model.RecordStripeOrphanSessionFallbackFile
+
+	err := bindStripeSessionWithRecovery(context.Background(), topUp.UserId, topUp.TradeNo, "cs_test_orphan_audit_write_fail", false)
 	require.Error(t, err)
 
 	stored := model.GetTopUpByTradeNo(topUp.TradeNo)
@@ -585,6 +602,250 @@ func TestBindStripeSessionWithRecoveryAuditWriteFailureDoesNotChangeOrderState(t
 	assert.Equal(t, common.TopUpStatusPending, stored.Status)
 	assert.Nil(t, stored.StripeSessionId)
 	assert.Nil(t, stored.StripeRecoverySessionId)
+}
+
+func TestBindStripeSessionWithRecoveryFallbackFileWrittenWhenAuditFails(t *testing.T) {
+	setupStripeControllerTestDB(t)
+	originalAttach := attachStripeSessionToTopUp
+	originalRecord := recordStripeSessionRecovery
+	originalExpire := expireStripeCheckoutSession
+	originalMark := markStripeTopUpFailed
+	originalAudit := recordStripeOrphanSessionAudit
+	originalFallback := recordStripeOrphanSessionFallbackFile
+	t.Cleanup(func() {
+		attachStripeSessionToTopUp = originalAttach
+		recordStripeSessionRecovery = originalRecord
+		expireStripeCheckoutSession = originalExpire
+		markStripeTopUpFailed = originalMark
+		recordStripeOrphanSessionAudit = originalAudit
+		recordStripeOrphanSessionFallbackFile = originalFallback
+	})
+
+	dir := t.TempDir()
+	restoreFallback := model.SetStripeOrphanSessionFallbackDirForTest(dir)
+	t.Cleanup(restoreFallback)
+	sessionID := "cs_test_fallback_controller_1234567890"
+	livemode := false
+	topUp := &model.TopUp{
+		UserId:              7003,
+		Amount:              10,
+		Money:               10,
+		TradeNo:             "ref_orphan_fallback_write",
+		PaymentMethod:       model.PaymentMethodStripe,
+		PaymentProvider:     model.PaymentProviderStripe,
+		Currency:            "USD",
+		ExpectedAmountMinor: 1000,
+		ExpectedQuota:       5000000,
+		StripeLivemode:      &livemode,
+		Status:              common.TopUpStatusPending,
+		CreateTime:          time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	attachStripeSessionToTopUp = func(tradeNo string, sessionID string) error { return errors.New("database unavailable") }
+	recordStripeSessionRecovery = func(tradeNo string, sessionID string, reason string) error { return errors.New("recovery save failed") }
+	expireStripeCheckoutSession = func(id string, params *stripe.CheckoutSessionExpireParams) (*stripe.CheckoutSession, error) {
+		return nil, errors.New("stripe expire failed")
+	}
+	markStripeTopUpFailed = func(tradeNo string, sessionID string, eventID string, livemode bool, targetStatus string, reason string) error {
+		t.Fatalf("fallback write must not mark the local order terminal")
+		return nil
+	}
+	recordStripeOrphanSessionAudit = func(input model.StripeOrphanSessionAuditInput) error {
+		return errors.New("audit table unavailable")
+	}
+	recordStripeOrphanSessionFallbackFile = model.RecordStripeOrphanSessionFallbackFile
+
+	err := bindStripeSessionWithRecovery(context.Background(), topUp.UserId, topUp.TradeNo, sessionID, false)
+	require.Error(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, "stripe_orphan_session_fallback.jsonl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), sessionID)
+	assert.Contains(t, string(data), `"resolved":false`)
+	assert.NotContains(t, string(data), "Stripe-Signature")
+	assert.NotContains(t, string(data), "webhook body")
+}
+
+func TestStripeWebhookCompletesAfterFallbackFileWrite(t *testing.T) {
+	setupStripeControllerTestDB(t)
+	confirmPaymentComplianceForTest(t)
+	originalAttach := attachStripeSessionToTopUp
+	originalRecord := recordStripeSessionRecovery
+	originalExpire := expireStripeCheckoutSession
+	originalMark := markStripeTopUpFailed
+	originalAudit := recordStripeOrphanSessionAudit
+	originalFallback := recordStripeOrphanSessionFallbackFile
+	originalSecret := setting.StripeWebhookSecret
+	originalKey := setting.StripeApiSecret
+	originalMode := setting.StripeMode
+	originalUnitPrice := setting.StripeUnitPrice
+	t.Cleanup(func() {
+		attachStripeSessionToTopUp = originalAttach
+		recordStripeSessionRecovery = originalRecord
+		expireStripeCheckoutSession = originalExpire
+		markStripeTopUpFailed = originalMark
+		recordStripeOrphanSessionAudit = originalAudit
+		recordStripeOrphanSessionFallbackFile = originalFallback
+		setting.StripeWebhookSecret = originalSecret
+		setting.StripeApiSecret = originalKey
+		setting.StripeMode = originalMode
+		setting.StripeUnitPrice = originalUnitPrice
+	})
+
+	setting.StripeWebhookSecret = "whsec_local"
+	setting.StripeApiSecret = "sk_test_local"
+	setting.StripeMode = "test"
+	setting.StripeUnitPrice = 1
+	dir := t.TempDir()
+	restoreFallback := model.SetStripeOrphanSessionFallbackDirForTest(dir)
+	t.Cleanup(restoreFallback)
+
+	sessionID := "cs_test_fallback_then_webhook_1234567890"
+	livemode := false
+	user := &model.User{Id: 7004, Username: "fallback_webhook_user", Status: common.UserStatusEnabled, AffCode: "fbwh"}
+	require.NoError(t, model.DB.Create(user).Error)
+	topUp := &model.TopUp{
+		UserId:              user.Id,
+		Amount:              10,
+		Money:               10,
+		TradeNo:             "ref_fallback_then_webhook",
+		PaymentMethod:       model.PaymentMethodStripe,
+		PaymentProvider:     model.PaymentProviderStripe,
+		Currency:            "USD",
+		ExpectedAmountMinor: 1000,
+		ExpectedQuota:       5000000,
+		StripeLivemode:      &livemode,
+		Status:              common.TopUpStatusPending,
+		CreateTime:          time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	attachStripeSessionToTopUp = func(tradeNo string, sessionID string) error { return errors.New("database unavailable") }
+	recordStripeSessionRecovery = func(tradeNo string, sessionID string, reason string) error { return errors.New("recovery save failed") }
+	expireStripeCheckoutSession = func(id string, params *stripe.CheckoutSessionExpireParams) (*stripe.CheckoutSession, error) {
+		return nil, errors.New("stripe expire failed")
+	}
+	markStripeTopUpFailed = func(tradeNo string, sessionID string, eventID string, livemode bool, targetStatus string, reason string) error {
+		t.Fatalf("fallback path must keep the order pending")
+		return nil
+	}
+	recordStripeOrphanSessionAudit = func(input model.StripeOrphanSessionAuditInput) error {
+		return errors.New("audit table unavailable")
+	}
+	recordStripeOrphanSessionFallbackFile = model.RecordStripeOrphanSessionFallbackFile
+
+	require.Error(t, bindStripeSessionWithRecovery(context.Background(), user.Id, topUp.TradeNo, sessionID, false))
+	require.FileExists(t, filepath.Join(dir, "stripe_orphan_session_fallback.jsonl"))
+
+	payload := stripeSessionEventPayload(t, map[string]any{
+		"id":                  sessionID,
+		"client_reference_id": topUp.TradeNo,
+		"metadata":            map[string]string{"trade_no": topUp.TradeNo},
+	})
+	body, signature := signedStripeWebhookRequest(t, payload, "whsec_local")
+	w := httptest.NewRecorder()
+	c, _ := ginCreateTestContext(w, "POST", "/api/stripe/webhook", body)
+	c.Request.Header.Set("Stripe-Signature", signature)
+
+	StripeWebhook(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("quota").Where("id = ?", user.Id).First(&storedUser).Error)
+	assert.Equal(t, 5000000, storedUser.Quota)
+}
+
+func TestStripeWebhookCompletesAfterFallbackFileWriteFailure(t *testing.T) {
+	setupStripeControllerTestDB(t)
+	confirmPaymentComplianceForTest(t)
+	originalAttach := attachStripeSessionToTopUp
+	originalRecord := recordStripeSessionRecovery
+	originalExpire := expireStripeCheckoutSession
+	originalMark := markStripeTopUpFailed
+	originalAudit := recordStripeOrphanSessionAudit
+	originalFallback := recordStripeOrphanSessionFallbackFile
+	originalSecret := setting.StripeWebhookSecret
+	originalKey := setting.StripeApiSecret
+	originalMode := setting.StripeMode
+	originalUnitPrice := setting.StripeUnitPrice
+	t.Cleanup(func() {
+		attachStripeSessionToTopUp = originalAttach
+		recordStripeSessionRecovery = originalRecord
+		expireStripeCheckoutSession = originalExpire
+		markStripeTopUpFailed = originalMark
+		recordStripeOrphanSessionAudit = originalAudit
+		recordStripeOrphanSessionFallbackFile = originalFallback
+		setting.StripeWebhookSecret = originalSecret
+		setting.StripeApiSecret = originalKey
+		setting.StripeMode = originalMode
+		setting.StripeUnitPrice = originalUnitPrice
+	})
+
+	setting.StripeWebhookSecret = "whsec_local"
+	setting.StripeApiSecret = "sk_test_local"
+	setting.StripeMode = "test"
+	setting.StripeUnitPrice = 1
+	badFallbackDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(badFallbackDir, []byte("file, not dir"), 0600))
+	restoreFallback := model.SetStripeOrphanSessionFallbackDirForTest(badFallbackDir)
+	t.Cleanup(restoreFallback)
+
+	sessionID := "cs_test_fallback_fail_then_webhook_1234567890"
+	livemode := false
+	user := &model.User{Id: 7005, Username: "fallback_fail_webhook_user", Status: common.UserStatusEnabled, AffCode: "ffwh"}
+	require.NoError(t, model.DB.Create(user).Error)
+	topUp := &model.TopUp{
+		UserId:              user.Id,
+		Amount:              10,
+		Money:               10,
+		TradeNo:             "ref_fallback_fail_then_webhook",
+		PaymentMethod:       model.PaymentMethodStripe,
+		PaymentProvider:     model.PaymentProviderStripe,
+		Currency:            "USD",
+		ExpectedAmountMinor: 1000,
+		ExpectedQuota:       5000000,
+		StripeLivemode:      &livemode,
+		Status:              common.TopUpStatusPending,
+		CreateTime:          time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	attachStripeSessionToTopUp = func(tradeNo string, sessionID string) error { return errors.New("database unavailable") }
+	recordStripeSessionRecovery = func(tradeNo string, sessionID string, reason string) error { return errors.New("recovery save failed") }
+	expireStripeCheckoutSession = func(id string, params *stripe.CheckoutSessionExpireParams) (*stripe.CheckoutSession, error) {
+		return nil, errors.New("stripe expire failed")
+	}
+	markStripeTopUpFailed = func(tradeNo string, sessionID string, eventID string, livemode bool, targetStatus string, reason string) error {
+		t.Fatalf("fallback failure must keep the order pending")
+		return nil
+	}
+	recordStripeOrphanSessionAudit = func(input model.StripeOrphanSessionAuditInput) error {
+		return errors.New("audit table unavailable")
+	}
+	recordStripeOrphanSessionFallbackFile = model.RecordStripeOrphanSessionFallbackFile
+
+	require.Error(t, bindStripeSessionWithRecovery(context.Background(), user.Id, topUp.TradeNo, sessionID, false))
+	stored := model.GetTopUpByTradeNo(topUp.TradeNo)
+	require.NotNil(t, stored)
+	require.Equal(t, common.TopUpStatusPending, stored.Status)
+
+	payload := stripeSessionEventPayload(t, map[string]any{
+		"id":                  sessionID,
+		"client_reference_id": topUp.TradeNo,
+		"metadata":            map[string]string{"trade_no": topUp.TradeNo},
+	})
+	body, signature := signedStripeWebhookRequest(t, payload, "whsec_local")
+	w := httptest.NewRecorder()
+	c, _ := ginCreateTestContext(w, "POST", "/api/stripe/webhook", body)
+	c.Request.Header.Set("Stripe-Signature", signature)
+
+	StripeWebhook(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("quota").Where("id = ?", user.Id).First(&storedUser).Error)
+	assert.Equal(t, 5000000, storedUser.Quota)
 }
 
 func TestStripeWebhookPaidResolvesOrphanSessionAudit(t *testing.T) {
@@ -765,7 +1026,7 @@ func TestBindStripeSessionWithRecoveryRecordFirstFailsThenSucceeds(t *testing.T)
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_recovery_retry", "cs_test_retry_recovery", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_recovery_retry", "cs_test_retry_recovery", false)
 	require.Error(t, err)
 	assert.Equal(t, 2, recordAttempts)
 }
@@ -803,7 +1064,7 @@ func TestBindStripeSessionWithRecoveryRecordKeepsFailing(t *testing.T) {
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_recovery_fail", "cs_test_recovery_fail", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_recovery_fail", "cs_test_recovery_fail", false)
 	require.Error(t, err)
 	assert.Equal(t, stripeRecoveryAttempts, recordAttempts)
 }
@@ -842,7 +1103,7 @@ func TestBindStripeSessionWithRecoverySaveFailsExpireSucceeds(t *testing.T) {
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_save_fail_expire_ok", "cs_test_save_fail_expire_ok", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_save_fail_expire_ok", "cs_test_save_fail_expire_ok", false)
 	require.Error(t, err)
 	assert.True(t, markedExpired)
 }
@@ -873,7 +1134,7 @@ func TestBindStripeSessionWithRecoverySaveFailsExpireFailsDoesNotMarkTerminal(t 
 		return nil
 	}
 
-	err := bindStripeSessionWithRecovery(context.Background(), "ref_double_fail", "cs_test_double_fail", false)
+	err := bindStripeSessionWithRecovery(context.Background(), 0, "ref_double_fail", "cs_test_double_fail", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expire uncertain")
 }
