@@ -493,6 +493,45 @@ func GetAllTopUps(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+func AdminListStripeOrphanSessionAudits(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	tradeNo := c.Query("trade_no")
+	var resolvedFilter *bool
+	if value := c.Query("resolved"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			common.ApiErrorMsg(c, "invalid resolved filter")
+			return
+		}
+		resolvedFilter = &parsed
+	}
+	createdAfter, err := parseOptionalUnixTime(c.Query("created_after"))
+	if err != nil {
+		common.ApiErrorMsg(c, "invalid created_after filter")
+		return
+	}
+	createdBefore, err := parseOptionalUnixTime(c.Query("created_before"))
+	if err != nil {
+		common.ApiErrorMsg(c, "invalid created_before filter")
+		return
+	}
+	audits, total, err := model.GetStripeOrphanSessionAudits(pageInfo, tradeNo, resolvedFilter, createdAfter, createdBefore)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(audits)
+	common.ApiSuccess(c, pageInfo)
+}
+
+func parseOptionalUnixTime(value string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(value, 10, 64)
+}
+
 func sanitizeTopUpsForResponse(topups []*model.TopUp) {
 	for _, topUp := range topups {
 		if topUp == nil {

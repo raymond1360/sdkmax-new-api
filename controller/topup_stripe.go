@@ -41,6 +41,7 @@ var createStripeCheckoutSession = session.New
 var expireStripeCheckoutSession = session.Expire
 var attachStripeSessionToTopUp = model.AttachStripeSessionToTopUp
 var recordStripeSessionRecovery = model.RecordStripeSessionRecovery
+var recordStripeOrphanSessionAudit = model.RecordStripeOrphanSessionAudit
 var markStripeTopUpFailed = model.MarkStripeTopUpFailed
 
 type StripePayRequest struct {
@@ -267,6 +268,9 @@ func handleStripeSessionPaid(ctx context.Context, event stripe.Event, payload []
 		}
 		return stripeWebhookTransientFailure
 	}
+	if err := model.ResolveStripeOrphanSessionAudit(validated.TradeNo, validated.SessionID, "resolved by paid webhook"); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Stripe orphan session audit resolve failed trade_no=%s session_id=%s error=%q", validated.TradeNo, maskStripeID(validated.SessionID), err.Error()))
+	}
 	logger.LogInfo(ctx, fmt.Sprintf("Stripe topup credited event_id=%s event_type=%s trade_no=%s session_id=%s payment_intent_id=%s amount_minor=%d currency=%s mode=%s", event.ID, event.Type, validated.TradeNo, maskStripeID(validated.SessionID), maskStripeID(validated.PaymentIntentID), validated.AmountTotal, validated.Currency, modeFromLivemode(validated.Livemode)))
 	return stripeWebhookOK
 }
@@ -480,13 +484,15 @@ func bindStripeSessionWithRecovery(ctx context.Context, tradeNo string, sessionI
 	if lastErr != nil {
 		reason = "stripe session binding pending recovery: " + lastErr.Error()
 	}
-	if err := recordStripeSessionRecoveryWithRetry(ctx, tradeNo, sessionID, reason); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Stripe session recovery record failed trade_no=%s session_id=%s error=%q", tradeNo, maskStripeID(sessionID), err.Error()))
+	recoveryErr := recordStripeSessionRecoveryWithRetry(ctx, tradeNo, sessionID, reason)
+	if recoveryErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("Stripe session recovery record failed trade_no=%s session_id=%s error=%q", tradeNo, maskStripeID(sessionID), recoveryErr.Error()))
 	}
 
 	expired, err := expireStripeCheckoutSession(sessionID, nil)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe session expire failed after bind retries trade_no=%s session_id=%s error=%q", tradeNo, maskStripeID(sessionID), err.Error()))
+		recordStripeOrphanAuditAfterTripleFailure(ctx, tradeNo, sessionID, livemode, lastErr, recoveryErr, err)
 		return fmt.Errorf("stripe session binding failed and expire uncertain: %w", lastErr)
 	}
 	if expired == nil || string(expired.Status) != string(stripe.CheckoutSessionStatusExpired) {
@@ -495,6 +501,7 @@ func bindStripeSessionWithRecovery(ctx context.Context, tradeNo string, sessionI
 			status = string(expired.Status)
 		}
 		logger.LogError(ctx, fmt.Sprintf("Stripe session expire uncertain after bind retries trade_no=%s session_id=%s returned_status=%s", tradeNo, maskStripeID(sessionID), status))
+		recordStripeOrphanAuditAfterTripleFailure(ctx, tradeNo, sessionID, livemode, lastErr, recoveryErr, fmt.Errorf("expire status uncertain: %s", status))
 		return fmt.Errorf("stripe session binding failed and expire status uncertain: %w", lastErr)
 	}
 	if err := markStripeTopUpFailed(tradeNo, sessionID, "", livemode, common.TopUpStatusExpired, "stripe session expired after local binding failure"); err != nil {
@@ -518,6 +525,30 @@ func recordStripeSessionRecoveryWithRetry(ctx context.Context, tradeNo string, s
 		return nil
 	}
 	return lastErr
+}
+
+func recordStripeOrphanAuditAfterTripleFailure(ctx context.Context, tradeNo string, sessionID string, livemode bool, attachErr error, recoveryErr error, expireErr error) {
+	if recoveryErr == nil {
+		return
+	}
+	if err := recordStripeOrphanSessionAudit(model.StripeOrphanSessionAuditInput{
+		TradeNo:           tradeNo,
+		StripeSessionId:   sessionID,
+		StripeLivemode:    livemode,
+		FailureStage:      model.StripeOrphanSessionFailureStageAttachRecoveryExpire,
+		AttachErrorCode:   errorString(attachErr),
+		RecoveryErrorCode: errorString(recoveryErr),
+		ExpireErrorCode:   errorString(expireErr),
+	}); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("SECURITY_ALERT stripe orphan session audit write failed trade_no=%s session_id=%s error=%q", tradeNo, maskStripeID(sessionID), err.Error()))
+	}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func GetChargedAmount(count float64, user model.User) float64 {
@@ -619,8 +650,5 @@ func payloadDigest(payload []byte) string {
 }
 
 func maskStripeID(id string) string {
-	if len(id) <= 10 {
-		return id
-	}
-	return id[:6] + "..." + id[len(id)-4:]
+	return model.MaskStripeIdentifier(id)
 }

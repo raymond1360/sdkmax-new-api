@@ -343,6 +343,13 @@ func nullableString(value string) *string {
 	return &value
 }
 
+func MaskStripeIdentifier(id string) string {
+	if len(id) <= 10 {
+		return id
+	}
+	return id[:6] + "..." + id[len(id)-4:]
+}
+
 func IsPermanentStripeTopUpError(err error) bool {
 	return errors.Is(err, ErrPaymentMethodMismatch) ||
 		errors.Is(err, ErrTopUpNotFound) ||

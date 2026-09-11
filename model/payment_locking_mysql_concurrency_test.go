@@ -77,6 +77,7 @@ func setupMySQLConcurrencyTestDB(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(
 		&User{},
 		&TopUp{},
+		&StripeOrphanSessionAudit{},
 		&Redemption{},
 		&SubscriptionPlan{},
 		&SubscriptionOrder{},
@@ -87,7 +88,7 @@ func setupMySQLConcurrencyTestDB(t *testing.T) {
 
 	t.Cleanup(func() {
 		for _, table := range []string{
-			"top_ups", "redemptions", "subscription_orders",
+			"top_ups", "stripe_orphan_session_audits", "redemptions", "subscription_orders",
 			"user_subscriptions", "subscription_pre_consume_records",
 			"subscription_plans", "logs", "users",
 		} {
