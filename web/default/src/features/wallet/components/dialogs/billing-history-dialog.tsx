@@ -59,6 +59,7 @@ import {
   getPaymentMethodName,
   formatTimestamp,
 } from '../../lib/billing'
+import { getPaidAmountDisplay } from '../../lib/payment-display'
 
 interface BillingHistoryDialogProps {
   open: boolean
@@ -96,9 +97,19 @@ export function BillingHistoryDialog({
     return `${value.slice(0, 6)}...${value.slice(-4)}`
   }
 
-  const formatMinorAmount = (minor?: number, currency?: string) => {
-    if (!minor || !currency) return '-'
+  const formatMinorAmount = (minor: number, currency: string) => {
     return `${(minor / 100).toFixed(2)} ${currency.toUpperCase()}`
+  }
+
+  const formatPaidAmount = (record: (typeof records)[number]) => {
+    const display = getPaidAmountDisplay(record)
+    if (display.kind === 'paid_minor') {
+      return formatMinorAmount(display.amountMinor, display.currency)
+    }
+    if (display.kind === 'unpaid') {
+      return t('Unpaid')
+    }
+    return formatNumber(display.money)
   }
 
   const handleConfirmComplete = async () => {
@@ -267,13 +278,7 @@ export function BillingHistoryDialog({
                               {t('Paid')}
                             </Label>
                             <div className='text-sm font-semibold text-red-600'>
-                              {record.currency
-                                ? formatMinorAmount(
-                                    record.paid_amount_minor ||
-                                      record.expected_amount_minor,
-                                    record.currency
-                                  )
-                                : formatNumber(record.money)}
+                              {formatPaidAmount(record)}
                             </div>
                           </div>
                         </div>
@@ -284,12 +289,14 @@ export function BillingHistoryDialog({
                           <div className='text-muted-foreground mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3'>
                             {record.complete_time ? (
                               <div>
-                                {t('Completed')}: {formatTimestamp(record.complete_time)}
+                                {t('Completed')}:{' '}
+                                {formatTimestamp(record.complete_time)}
                               </div>
                             ) : null}
                             {record.stripe_session_id ? (
                               <div>
-                                {t('Session')}: {maskId(record.stripe_session_id)}
+                                {t('Session')}:{' '}
+                                {maskId(record.stripe_session_id)}
                               </div>
                             ) : null}
                             {record.stripe_payment_intent_id ? (
